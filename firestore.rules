@@ -7,6 +7,13 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function turnoAbierto(turnoId) {
+      let t = get(/databases/$(database)/documents/turnos_caja/$(turnoId)).data;
+      return t.estado == "ABIERTO"
+        && t.usuario_id == request.auth.uid
+        && t.caja_id is string;
+    }
+
     // --- PERFIL DE USUARIO Y ROLES ---
     // El usuario puede leer su propio perfil para saber si es admin/cajero
     match /usuarios/{uid} {
@@ -18,8 +25,36 @@ service cloud.firestore {
     // --- MOVIMIENTOS ---
     match /movimientos_caja/{movId} {
       allow read: if signedIn() && resource.data.usuario_id == request.auth.uid;
-      allow create: if signedIn() && request.resource.data.usuario_id == request.auth.uid;
+      allow create: if signedIn()
+        && request.resource.data.usuario_id == request.auth.uid
+        && request.resource.data.caja_id is string
+        && request.resource.data.turno_id is string
+        && request.resource.data.caja_id == get(/databases/$(database)/documents/turnos_caja/$(request.resource.data.turno_id)).data.caja_id
+        && turnoAbierto(request.resource.data.turno_id);
       allow update, delete: if false;
+    }
+
+    // --- TURNOS ---
+    match /turnos_caja/{turnoId} {
+      allow read: if signedIn() && resource.data.usuario_id == request.auth.uid;
+
+      // Crear turno ABIERTO (uno por usuario/caja a la vez, validado por query de unicidad en app + reglas mínimas)
+      allow create: if signedIn()
+        && request.resource.data.usuario_id == request.auth.uid
+        && request.resource.data.caja_id is string
+        && request.resource.data.estado == "ABIERTO"
+        && !("fecha_fin" in request.resource.data)
+        && !("cierre_id" in request.resource.data);
+
+      // Cerrar turno (asociar cierre)
+      allow update: if signedIn()
+        && resource.data.usuario_id == request.auth.uid
+        && request.resource.data.usuario_id == request.auth.uid
+        && resource.data.estado == "ABIERTO"
+        && request.resource.data.estado == "CERRADO"
+        && request.resource.data.cierre_id is string;
+
+      allow delete: if false;
     }
 
     // --- CIERRES ---

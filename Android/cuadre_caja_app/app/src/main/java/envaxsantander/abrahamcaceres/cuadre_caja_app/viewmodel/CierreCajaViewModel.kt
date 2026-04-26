@@ -11,12 +11,15 @@ import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
+import com.google.firebase.firestore.ktx.runTransaction
 import com.google.firebase.storage.FirebaseStorage
-import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.tasks.await
 import kotlin.math.abs
 
 class CierreCajaViewModel(
@@ -28,6 +31,8 @@ class CierreCajaViewModel(
     private val _state = MutableStateFlow(CierreState())
     val state = _state.asStateFlow()
 
+    private var turnoJob: Job? = null
+
     init {
         refreshAuthAndStart()
     }
@@ -37,19 +42,100 @@ class CierreCajaViewModel(
         _state.update { it.copy(usuarioId = uid) }
         Log.d(tag, "auth: currentUser uid=${uid ?: "null"}")
 
+        turnoJob?.cancel()
+        turnoJob = null
+
         if (uid.isNullOrBlank()) {
-            _state.update { it.copy(cierreError = "No autenticado: inicia sesión para continuar.") }
+            _state.update {
+                it.copy(
+                    cierreError = "No autenticado: inicia sesión para continuar.",
+                    puedeOperar = false,
+                    turnoBloqueoMsg = "Sin sesión",
+                    turnoId = null,
+                    turnoEstado = null,
+                    rol = null,
+                )
+            }
             recalcular()
             return
         }
 
-        observeMovimientos()
-        recalcular()
+        viewModelScope.launch {
+            cargarRol(uid)
+            ensureTurnoYObservar(uid)
+        }
     }
 
-    private fun observeMovimientos() {
-        val usuarioId = auth.currentUser?.uid ?: return
-        viewModelScope.launch {
+    private suspend fun cargarRol(uid: String) {
+        try {
+            val snap = FirebaseFirestore.getInstance()
+                .collection("usuarios")
+                .document(uid)
+                .get()
+                .await()
+
+            val rol = snap.getString("rol")
+            _state.update { it.copy(rol = rol) }
+        } catch (t: Throwable) {
+            Log.e(tag, "rol: failed", t)
+            _state.update { it.copy(rol = null, cierreError = "No se pudo cargar rol: ${t.message ?: t.javaClass.simpleName}") }
+        }
+    }
+
+    private suspend fun ensureTurnoYObservar(uid: String) {
+        val cajaId = _state.value.cajaId
+
+        try {
+            // Garantiza un turno ABIERTO para operar (MVP).
+            repo.crearTurnoAbiertoSiNoExiste(cajaId = cajaId, usuarioId = uid)
+        } catch (t: Throwable) {
+            Log.e(tag, "turno: crearTurnoAbiertoSiNoExiste failed", t)
+            _state.update {
+                it.copy(
+                    puedeOperar = false,
+                    turnoBloqueoMsg = "No se pudo abrir turno: ${t.message ?: t.javaClass.simpleName}",
+                )
+            }
+            recalcular()
+            return
+        }
+
+        turnoJob = viewModelScope.launch {
+            repo.observeTurnoActivo(cajaId = cajaId, usuarioId = uid).collectLatest { turno ->
+                val abierto = turno != null && turno.estado == "ABIERTO"
+                _state.update {
+                    it.copy(
+                        turnoId = turno?.id,
+                        turnoEstado = turno?.estado,
+                        puedeOperar = abierto && !it.cierreCompletado,
+                        turnoBloqueoMsg = when {
+                            it.cierreCompletado -> "Caja cerrada (cierre completado)."
+                            turno == null -> "Sin turno ABIERTO."
+                            turno.estado != "ABIERTO" -> "Turno no operable: ${turno.estado}"
+                            else -> null
+                        },
+                    )
+                }
+
+                // Si ya no hay turno activo, deja de escuchar movimientos (evita “seguir operando” en UI).
+                if (abierto) {
+                    observeMovimientos(uid)
+                } else {
+                    movimientosJob?.cancel()
+                    movimientosJob = null
+                }
+
+                recalcular()
+            }
+        }
+    }
+
+    private var movimientosJob: Job? = null
+
+    private fun observeMovimientos(usuarioId: String) {
+        if (movimientosJob != null) return
+
+        movimientosJob = viewModelScope.launch {
             repo.observeMovimientos(usuarioId).collect { movimientos ->
                 val resumen = calcularResumen(movimientos)
                 val rango = calcularRangoFechas(movimientos)
@@ -92,17 +178,24 @@ class CierreCajaViewModel(
             else -> "CRITICAL"
         }
 
+        val requiereAdmin = nivel == "CRITICAL" && s.rol != "admin"
+
         _state.update {
-            val canClose =
+            val puedeCerrarBase =
                 it.estadoZ != "PENDIENTE" &&
                     it.estadoZ != "ERROR" &&
                     total > 0.0 &&
-                    !it.cierreCompletado
+                    !it.cierreCompletado &&
+                    it.puedeOperar
+
+            val rolOk = it.rol == "admin" || it.rol == "cajero"
+            val puedeCerrar = puedeCerrarBase && rolOk && !requiereAdmin
+
             it.copy(
                 totalContado = total,
                 diferencia = diferencia,
                 nivel = nivel,
-                canClose = canClose,
+                canClose = puedeCerrar,
             )
         }
     }
@@ -114,6 +207,13 @@ class CierreCajaViewModel(
             recalcular()
             return
         }
+
+        if (!_state.value.puedeOperar) {
+            _state.update { it.copy(estadoZ = "ERROR", cierreError = "Caja cerrada: no puedes subir PDF.") }
+            recalcular()
+            return
+        }
+
         val storage = FirebaseStorage.getInstance()
         val db = FirebaseFirestore.getInstance()
 
@@ -186,8 +286,24 @@ class CierreCajaViewModel(
 
             val s = _state.value
 
+            if (!s.puedeOperar) {
+                _state.update { it.copy(cierreError = "No se puede cerrar: caja cerrada / sin turno abierto.") }
+                return@launch
+            }
+
             if (!(s.estadoZ != "PENDIENTE" && s.estadoZ != "ERROR" && s.totalContado > 0.0)) {
                 _state.update { it.copy(cierreError = "No se puede cerrar: falta Z o conteo.") }
+                return@launch
+            }
+
+            val turnoId = s.turnoId
+            if (turnoId.isNullOrBlank()) {
+                _state.update { it.copy(cierreError = "No se puede cerrar: falta turnoId.") }
+                return@launch
+            }
+
+            if (s.nivel == "CRITICAL" && s.rol != "admin") {
+                _state.update { it.copy(cierreError = "Diferencia CRITICAL: requiere admin para cerrar.") }
                 return@launch
             }
 
@@ -200,6 +316,7 @@ class CierreCajaViewModel(
                 val cierre = hashMapOf(
                     "caja_id" to s.cajaId,
                     "usuario_id" to userId,
+                    "turno_id" to turnoId,
                     "fecha_inicio" to fechaInicio,
                     "fecha_fin" to fechaFin,
                     "resumen" to mapOf(
@@ -227,27 +344,53 @@ class CierreCajaViewModel(
                 val cierreRef = s.cierreDocId?.let { db.collection("cierres_caja").document(it) }
                     ?: db.collection("cierres_caja").document()
 
-                cierreRef.set(cierre, SetOptions.merge()).await()
+                db.runTransaction { tx ->
+                    tx.set(cierreRef, cierre, SetOptions.merge())
 
-                db.collection("logs").add(
-                    mapOf(
-                        "modulo" to "cierre_caja",
-                        "accion" to "CREATE",
-                        "referencia_id" to cierreRef.id,
-                        "usuario_id" to userId,
-                        "timestamp" to FieldValue.serverTimestamp(),
-                    ),
-                ).await()
+                    val turnoRef = db.collection("turnos_caja").document(turnoId)
+                    tx.update(
+                        turnoRef,
+                        mapOf(
+                            "estado" to "CERRADO",
+                            "fecha_fin" to FieldValue.serverTimestamp(),
+                            "cierre_id" to cierreRef.id,
+                        ),
+                    )
+
+                    val logRef = db.collection("logs").document()
+                    tx.set(
+                        logRef,
+                        mapOf(
+                            "modulo" to "cierre_caja",
+                            "accion" to "CREATE",
+                            "referencia_id" to cierreRef.id,
+                            "usuario_id" to userId,
+                            "timestamp" to FieldValue.serverTimestamp(),
+                        ),
+                    )
+
+                    null
+                }.await()
 
                 _state.update {
                     it.copy(
                         loading = false,
                         cierreCompletado = true,
                         canClose = false,
+                        puedeOperar = false,
+                        turnoEstado = "CERRADO",
+                        turnoBloqueoMsg = "Caja cerrada (turno cerrado).",
                     )
                 }
-            } catch (_: Throwable) {
-                _state.update { it.copy(loading = false, cierreError = "Error guardando cierre", estadoZ = it.estadoZ) }
+                recalcular()
+            } catch (t: Throwable) {
+                Log.e(tag, "guardarCierre: failed", t)
+                _state.update {
+                    it.copy(
+                        loading = false,
+                        cierreError = t.message ?: t.javaClass.simpleName,
+                    )
+                }
             }
         }
     }
@@ -293,4 +436,3 @@ class CierreCajaViewModel(
         return RangoFechas(inicio = times.first(), fin = times.last())
     }
 }
-

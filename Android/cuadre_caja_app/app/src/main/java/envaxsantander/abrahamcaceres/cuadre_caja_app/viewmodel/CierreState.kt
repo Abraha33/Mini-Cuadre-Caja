@@ -5,6 +5,13 @@ import com.google.firebase.Timestamp
 data class CierreState(
     val cajaId: String = "caja_1",
     val usuarioId: String? = null,
+    val rol: String? = null,
+
+    val turnoId: String? = null,
+    val turnoEstado: String? = null,
+    val puedeOperar: Boolean = false,
+    val turnoBloqueoMsg: String? = null,
+
     val ingresos: Double = 0.0,
     val egresos: Double = 0.0,
     val saldoEsperado: Double = 0.0,

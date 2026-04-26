@@ -7,6 +7,8 @@ data class MovimientoCaja(
     val monto: Double = 0.0,
     val metodo: String = "",
     val usuarioId: String = "",
+    val cajaId: String = "",
+    val turnoId: String = "",
     val createdAt: Timestamp? = null,
 )
 

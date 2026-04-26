@@ -34,9 +34,11 @@ La app incluye pantalla mínima **Login / Register** y crea el perfil en Firesto
 
 - `movimientos_caja` (fuente de verdad operativa)
   - Campos mínimos: `tipo`, `monto`, `metodo`, `usuario_id`, `created_at`
+  - Campos de bloqueo por turno (requeridos por reglas actuales): `caja_id`, `turno_id`
 - `cierres_caja` (snapshot del cierre + evidencia Z)
 - `logs` (auditoría append-only desde cliente)
 - `usuarios/{uid}` (perfil/rol)
+- `turnos_caja` (control de turno: `ABIERTO` → `CERRADO` con `cierre_id`)
 
 ### 4) Storage: PDF del Informe Z
 
@@ -82,6 +84,7 @@ Luego **Sync Gradle** y **Run**.
 
 - **`No autenticado` al subir PDF**: no hay sesión Firebase Auth (Email/Password deshabilitado o no hiciste login).
 - **`PERMISSION_DENIED`**: reglas no publicadas o colección/campos no alineados (`usuario_id` debe coincidir con `request.auth.uid` donde aplique).
+- **`FAILED_PRECONDITION` / error de índice**: Firestore te pedirá crear índices compuestos para queries con varios `whereEqualTo` + `orderBy`. Abre el link del error en consola y crea el índice sugerido.
 - **Live Edit / Apply Changes rompe Compose**: desactiva Live Edit o reinstala la app; evita “hot swap” de firmas `@Composable`.
 
 ## Nota de arquitectura

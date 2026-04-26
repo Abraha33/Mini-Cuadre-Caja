@@ -47,8 +47,27 @@ fun CierreCajaScreen(
                 Spacer(Modifier.height(4.dp))
                 Text("Usuario: $uid", style = MaterialTheme.typography.bodySmall)
             }
+            state.rol?.let { rol ->
+                Spacer(Modifier.height(4.dp))
+                Text("Rol: $rol", style = MaterialTheme.typography.bodySmall)
+            }
+            state.turnoId?.let { tid ->
+                Spacer(Modifier.height(4.dp))
+                Text("Turno: $tid (${state.turnoEstado ?: "?"})", style = MaterialTheme.typography.bodySmall)
+            }
 
             Spacer(Modifier.height(16.dp))
+
+            state.turnoBloqueoMsg?.let { msg ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text("Estado operación", style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.height(6.dp))
+                        Text(msg, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+            }
 
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp)) {
@@ -68,7 +87,10 @@ fun CierreCajaScreen(
 
                     Spacer(Modifier.height(8.dp))
 
-                    Button(onClick = { launcher.launch("application/pdf") }) {
+                    Button(
+                        onClick = { launcher.launch("application/pdf") },
+                        enabled = state.puedeOperar && !state.loading,
+                    ) {
                         Text("Subir Informe Z")
                     }
 
@@ -102,6 +124,7 @@ fun CierreCajaScreen(
                         value = state.monedas,
                         onValueChange = { viewModel.onMonedasChange(it) },
                         label = { Text("Monedas") },
+                        enabled = state.puedeOperar && !state.loading,
                         modifier = Modifier.fillMaxWidth(),
                     )
 
@@ -111,6 +134,7 @@ fun CierreCajaScreen(
                         value = state.billetes,
                         onValueChange = { viewModel.onBilletesChange(it) },
                         label = { Text("Billetes") },
+                        enabled = state.puedeOperar && !state.loading,
                         modifier = Modifier.fillMaxWidth(),
                     )
 
@@ -126,6 +150,13 @@ fun CierreCajaScreen(
                 Column(Modifier.padding(12.dp)) {
                     Text("Diferencia: ${state.diferencia}")
                     Text("Nivel: ${state.nivel}")
+                    if (state.nivel == "CRITICAL" && state.rol != "admin") {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "CRITICAL: solo admin puede cerrar.",
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
                 }
             }
 
