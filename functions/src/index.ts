@@ -25,6 +25,7 @@ import * as pdfParse from "pdf-parse";
 import { crearLog } from "./services/log.service";
 import { getUserRole } from "./services/user.service";
 import { logError } from "./core/logger";
+import { crearAlerta } from "./services/alert.service";
 
 // Start writing functions
 // https://firebase.google.com/docs/functions/typescript
@@ -295,6 +296,17 @@ export const procesarInformeZ = onObjectFinalized(
           ingresosTotal: ingresosTotal ?? null,
         },
       });
+
+      if (nivel !== "OK") {
+        await crearAlerta({
+          tipo: "Z_MISMATCH",
+          nivel,
+          modulo: "cierre_caja",
+          referencia_id: cierreDoc.id,
+          mensaje: "Z no coincide con ERP",
+          usuario_id: uid,
+        });
+      }
 
       logger.info("procesarInformeZ: updated cierre", {
         cierreId: cierreDoc.id,
@@ -604,6 +616,29 @@ export const crearCierre = onCall(
           validacionZ: result.zValidacion,
         },
       });
+
+      if (result.nivel === "CRITICAL") {
+        await crearAlerta({
+          tipo: "DIFERENCIA_CRITICAL",
+          nivel: result.nivel,
+          modulo: "cierre_caja",
+          referencia_id: result.cierreId,
+          mensaje: `Diferencia crítica detectada: ${result.diferencia}`,
+          usuario_id: uid,
+        });
+      }
+
+      // En este sistema, Z está OK cuando `procesarInformeZ` marcó VALIDADO.
+      if (result.zValidacion !== "VALIDADO") {
+        await crearAlerta({
+          tipo: "Z_MISMATCH",
+          nivel: result.zValidacion,
+          modulo: "cierre_caja",
+          referencia_id: result.cierreId,
+          mensaje: "Z no coincide con ERP",
+          usuario_id: uid,
+        });
+      }
 
       logger.info("crearCierre: success", {uid, cierreId: cierreDocId, turnoId});
       return {ok: true, ...result};
