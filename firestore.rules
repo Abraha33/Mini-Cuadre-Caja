@@ -105,20 +105,15 @@ service cloud.firestore {
         && !('fecha_fin' in request.resource.data)
         && !('cierre_id' in request.resource.data);
 
-      allow update: if signedIn() && puedeOperarCaja()
-        && resource.data.usuario_id == request.auth.uid
-        && request.resource.data.usuario_id == request.auth.uid
-        && resource.data.estado == 'ABIERTO'
-        && request.resource.data.estado == 'CERRADO'
-        && request.resource.data.cierre_id is string;
+      // Cierre de turno solo vía Cloud Function (Admin SDK); el cliente no muta el turno.
+      allow update: if false;
 
       allow delete: if isAdmin();
     }
 
     // -----------------------------
     // cierres_caja
-    // Inmutable tras COMPLETADO. El cliente legitima: PDF_CARGADO -> COMPLETADO (merge).
-    // Admin SDK (Functions) no pasa por estas reglas.
+    // Borrador PDF desde cliente; completar cierre solo vía callable `crearCierre` (Admin SDK).
     // -----------------------------
     match /cierres_caja/{cierreId} {
       allow read: if signedIn()
@@ -132,15 +127,7 @@ service cloud.firestore {
         && request.resource.data.z_pdf_url is string
         && request.resource.data.z is map;
 
-      allow update: if signedIn() && puedeOperarCaja()
-        && resource.data.usuario_id == request.auth.uid
-        && request.resource.data.usuario_id == resource.data.usuario_id
-        && resource.data.estado == 'PDF_CARGADO'
-        && request.resource.data.estado == 'COMPLETADO'
-        && request.resource.data.z_pdf_path == resource.data.z_pdf_path
-        && request.resource.data.z_pdf_url == resource.data.z_pdf_url
-        && request.resource.data.turno_id is string
-        && request.resource.data.caja_id is string;
+      allow update: if false;
 
       allow delete: if isAdmin();
     }
@@ -151,11 +138,8 @@ service cloud.firestore {
     match /logs/{logId} {
       allow read: if isAdmin();
 
-      allow create: if signedIn() && puedeOperarCaja()
-        && request.resource.data.usuario_id == request.auth.uid
-        && request.resource.data.modulo is string
-        && request.resource.data.accion is string
-        && request.resource.data.referencia_id is string;
+      // Solo backend (Admin SDK) debe escribir logs.
+      allow create: if false;
 
       allow update, delete: if false;
     }

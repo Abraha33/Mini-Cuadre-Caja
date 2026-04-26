@@ -12,8 +12,6 @@ import com.google.firebase.functions.FirebaseFunctionsException
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.SetOptions
-import com.google.firebase.firestore.ktx.runTransaction
 import com.google.firebase.storage.FirebaseStorage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -32,6 +30,11 @@ class CierreCajaViewModel(
 
     private val _state = MutableStateFlow(CierreState())
     val state = _state.asStateFlow()
+
+    /** Misma región que Cloud Functions (`crearCierre`, `exportarCierre`). */
+    private val functionsUsEast1: FirebaseFunctions by lazy {
+        FirebaseFunctions.getInstance("us-east1")
+    }
 
     private var turnoJob: Job? = null
 
@@ -319,8 +322,7 @@ class CierreCajaViewModel(
 
     fun guardarCierre() {
         viewModelScope.launch {
-            val userId = auth.currentUser?.uid ?: return@launch
-            val db = FirebaseFirestore.getInstance()
+            if (auth.currentUser?.uid == null) return@launch
 
             val s = _state.value
 
@@ -348,68 +350,38 @@ class CierreCajaViewModel(
 
             _state.update { it.copy(loading = true, cierreError = null) }
 
-            try {
-                val fechaInicio = s.fechaInicio ?: Timestamp.now()
-                val fechaFin = s.fechaFin ?: Timestamp.now()
+            val cierreDocId = s.cierreDocId
+            if (cierreDocId.isNullOrBlank()) {
+                _state.update {
+                    it.copy(loading = false, cierreError = "Falta id de cierre (sube el PDF del informe Z primero).")
+                }
+                return@launch
+            }
 
-                val cierre = hashMapOf(
-                    "caja_id" to s.cajaId,
-                    "usuario_id" to userId,
-                    "turno_id" to turnoId,
-                    "fecha_inicio" to fechaInicio,
-                    "fecha_fin" to fechaFin,
-                    "resumen" to mapOf(
-                        "ingresos_efectivo" to s.ingresos,
-                        "egresos_efectivo" to s.egresos,
-                        "saldo_esperado" to s.saldoEsperado,
-                        "transferencias" to s.transferencias,
-                    ),
+            try {
+                val payload = hashMapOf(
+                    "turnoId" to turnoId,
+                    "cajaId" to s.cajaId,
+                    "cierreDocId" to cierreDocId,
                     "conteo" to mapOf(
                         "monedas" to (s.monedas.toDoubleOrNull() ?: 0.0),
                         "billetes" to (s.billetes.toDoubleOrNull() ?: 0.0),
-                        "total" to s.totalContado,
                     ),
-                    "diferencia" to s.diferencia,
-                    "nivel" to s.nivel,
-                    "z" to mapOf(
-                        "pdf_url" to s.zPdfUrl,
-                        "pdf_path" to s.zPdfPath,
-                        "validacion" to s.estadoZ,
-                    ),
-                    "estado" to "COMPLETADO",
-                    "created_at" to FieldValue.serverTimestamp(),
                 )
 
-                val cierreRef = s.cierreDocId?.let { db.collection("cierres_caja").document(it) }
-                    ?: db.collection("cierres_caja").document()
+                val result = functionsUsEast1
+                    .getHttpsCallable("crearCierre")
+                    .call(payload)
+                    .await()
+                    .data as? Map<*, *>
 
-                db.runTransaction { tx ->
-                    tx.set(cierreRef, cierre, SetOptions.merge())
-
-                    val turnoRef = db.collection("turnos_caja").document(turnoId)
-                    tx.update(
-                        turnoRef,
-                        mapOf(
-                            "estado" to "CERRADO",
-                            "fecha_fin" to FieldValue.serverTimestamp(),
-                            "cierre_id" to cierreRef.id,
-                        ),
-                    )
-
-                    val logRef = db.collection("logs").document()
-                    tx.set(
-                        logRef,
-                        mapOf(
-                            "modulo" to "cierre_caja",
-                            "accion" to "CREATE",
-                            "referencia_id" to cierreRef.id,
-                            "usuario_id" to userId,
-                            "timestamp" to FieldValue.serverTimestamp(),
-                        ),
-                    )
-
-                    null
-                }.await()
+                val diferenciaSrv = (result?.get("diferencia") as? Number)?.toDouble() ?: s.diferencia
+                val nivelSrv = result?.get("nivel") as? String ?: s.nivel
+                val resumenMap = result?.get("resumen") as? Map<*, *>
+                val ingSrv = (resumenMap?.get("ingresos_efectivo") as? Number)?.toDouble()
+                val egrSrv = (resumenMap?.get("egresos_efectivo") as? Number)?.toDouble()
+                val saldoSrv = (resumenMap?.get("saldo_esperado") as? Number)?.toDouble()
+                val transSrv = (resumenMap?.get("transferencias") as? Number)?.toDouble()
 
                 _state.update {
                     it.copy(
@@ -419,9 +391,23 @@ class CierreCajaViewModel(
                         puedeOperar = false,
                         turnoEstado = "CERRADO",
                         turnoBloqueoMsg = "Caja cerrada (turno cerrado).",
+                        diferencia = diferenciaSrv,
+                        nivel = nivelSrv,
+                        ingresos = ingSrv ?: it.ingresos,
+                        egresos = egrSrv ?: it.egresos,
+                        saldoEsperado = saldoSrv ?: it.saldoEsperado,
+                        transferencias = transSrv ?: it.transferencias,
                     )
                 }
                 recalcular()
+            } catch (t: FirebaseFunctionsException) {
+                Log.e(tag, "guardarCierre: functions", t)
+                _state.update {
+                    it.copy(
+                        loading = false,
+                        cierreError = "${t.code}: ${t.message ?: t.details}",
+                    )
+                }
             } catch (t: Throwable) {
                 Log.e(tag, "guardarCierre: failed", t)
                 _state.update {
@@ -432,11 +418,6 @@ class CierreCajaViewModel(
                 }
             }
         }
-    }
-
-    /** Misma región que Cloud Functions (`exportarCierre`). */
-    private val functionsUsEast1: FirebaseFunctions by lazy {
-        FirebaseFunctions.getInstance("us-east1")
     }
 
     fun exportarCierre() {
