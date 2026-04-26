@@ -149,7 +149,20 @@ service cloud.firestore {
     // -----------------------------
     match /alertas/{alertaId} {
       allow read: if isAdmin();
-      allow create, update, delete: if false;
+      allow create, delete: if false;
+
+      // Defensa en profundidad: si alguien intenta usar SDK cliente,
+      // solo un admin puede resolver y solo cambia campos de auditoría.
+      allow update: if isAdmin()
+        && resource.data.estado == "PENDIENTE"
+        && request.resource.data.estado == "RESUELTA"
+        && request.resource.data.diff(resource.data).changedKeys()
+          .hasOnly(["estado", "audit"])
+        && request.resource.data.audit is map
+        && request.resource.data.audit.resolved_by == request.auth.uid
+        && request.resource.data.audit.resolucion_nota is string
+        && request.resource.data.audit.resolucion_nota.size() > 0
+        && request.resource.data.audit.resolucion_nota.size() <= 1000;
     }
 
     match /{document=**} {

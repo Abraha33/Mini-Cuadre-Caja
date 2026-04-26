@@ -26,6 +26,7 @@ import { crearLog } from "./services/log.service";
 import { getUserRole } from "./services/user.service";
 import { logError } from "./core/logger";
 import { crearAlerta } from "./services/alert.service";
+import { resolverAlerta } from "./services/alert.service";
 
 // Start writing functions
 // https://firebase.google.com/docs/functions/typescript
@@ -645,6 +646,71 @@ export const crearCierre = onCall(
     } catch (e) {
       await logError(e, uid);
       throw e;
+    }
+  }
+);
+
+export const resolverAlertaHandler = onCall(
+  {
+    region: "us-east1",
+    memory: "256MiB",
+    timeoutSeconds: 30,
+  },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) {
+      throw new HttpsError("unauthenticated", "Acceso denegado.");
+    }
+
+    const rol = await getUserRole(uid);
+    if (rol !== "admin") {
+      throw new HttpsError("permission-denied", "Privilegios insuficientes.");
+    }
+
+    const data = (request.data ?? {}) as Record<string, unknown>;
+    const alertaId = String(data.alertaId ?? "").trim();
+    const resolucion = String(data.resolucion ?? "").trim();
+    if (!alertaId || !resolucion) {
+      throw new HttpsError("invalid-argument", "Datos incompletos.");
+    }
+    if (resolucion.length > 1000) {
+      throw new HttpsError(
+        "invalid-argument",
+        "La nota de resolución excede 1000 caracteres."
+      );
+    }
+
+    try {
+      const ip =
+        (typeof request.rawRequest?.ip === "string" && request.rawRequest.ip) ||
+        undefined;
+
+      const result = await resolverAlerta(alertaId, uid, resolucion, ip);
+
+      await crearLog({
+        modulo: "alertas",
+        accion: "RESOLVE",
+        referencia_id: alertaId,
+        usuario_id: uid,
+        rol,
+        detalle: {
+          resolucion,
+        },
+      });
+
+      logger.info("resolverAlertaHandler: resolved", {alertaId, admin: uid});
+      return result;
+    } catch (e) {
+      await logError(e, uid);
+
+      const msg = String((e as any)?.message ?? "");
+      if (msg === "ALERTA_NOT_FOUND") {
+        throw new HttpsError("not-found", "ALERTA_NOT_FOUND");
+      }
+      if (msg === "ALERTA_ALREADY_RESOLVED") {
+        throw new HttpsError("failed-precondition", "ALERTA_ALREADY_RESOLVED");
+      }
+      throw new HttpsError("internal", msg || "Error interno.");
     }
   }
 );
