@@ -12,6 +12,19 @@ import kotlinx.coroutines.tasks.await
 class CierreRepository(
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance(),
 ) {
+    fun observeCierre(cierreId: String): Flow<Map<String, Any?>?> = callbackFlow {
+        val ref = db.collection("cierres_caja").document(cierreId)
+        val listener = ref.addSnapshotListener { snap, error ->
+            if (error != null) {
+                Log.e("FirestoreError", "Error observando cierre", error)
+                trySend(null)
+                return@addSnapshotListener
+            }
+            trySend(snap?.data)
+        }
+        awaitClose { listener.remove() }
+    }
+
     suspend fun crearTurnoAbiertoSiNoExiste(cajaId: String, usuarioId: String): String {
         val existing = db.collection("turnos_caja")
             .whereEqualTo("usuario_id", usuarioId)

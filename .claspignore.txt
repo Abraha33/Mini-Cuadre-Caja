@@ -1,0 +1,13 @@
+# Ignorar todo por defecto
+**/**
+
+# Ignorar explícitamente las carpetas de Firebase y node_modules
+node_modules/
+**/node_modules/**
+functions/
+firestore/
+.firebase/
+
+# Permitir solo los archivos necesarios de Apps Script
+!ExportCierreCaja.gs
+!appsscript.json

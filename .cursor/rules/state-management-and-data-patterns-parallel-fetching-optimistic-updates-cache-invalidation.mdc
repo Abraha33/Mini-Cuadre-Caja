@@ -1,0 +1,24 @@
+---
+alwaysApply: true
+---
+
+## Parallel Data Fetching Pattern
+```typescript
+// ✅ Parallel — ~90ms total
+const [user, posts, analytics] = await Promise.all([
+  getUser(userId),
+  getPosts(userId),
+  getAnalytics(userId),
+])
+
+// ❌ Sequential — ~230ms total
+const user = await getUser(userId)
+const posts = await getPosts(userId)
+const analytics = await getAnalytics(userId)
+```
+
+## Error Result Pattern
+Return typed errors instead of throwing everywhere:
+```typescript
+type Result<T> = { ok: true; data: T } | { ok: false; error: string }
+```

@@ -105,9 +105,15 @@ fun CierreCajaScreen(
 
                     state.zResumen?.let { z ->
                         Spacer(Modifier.height(8.dp))
-                        Text("Ventas Z: ${z.ventas}")
-                        Text("Devoluciones Z: ${z.devoluciones}")
-                        Text("Neto Z: ${z.ventas - z.devoluciones}")
+                        Text("Ventas Z: ${z.ventas ?: "-"}")
+                        Text("Devoluciones Z: ${z.devoluciones ?: "-"}")
+                        Text("Neto Z: ${z.neto ?: "-"}")
+                        z.diffVsIngresosTotal?.let { diff ->
+                            Text("Diff vs ERP ingresos total: $diff")
+                        }
+                        z.nivel?.let { lvl ->
+                            Text("Nivel validación: $lvl")
+                        }
                     }
                 }
             }
@@ -178,6 +184,23 @@ fun CierreCajaScreen(
             if (state.cierreCompletado) {
                 Spacer(Modifier.height(8.dp))
                 Text("Cierre guardado: OK")
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = { viewModel.exportarCierre() },
+                    enabled = !state.exportSheetsLoading &&
+                        state.cierreDocId != null,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Exportar a Sheets / email")
+                }
+                state.exportSheetsError?.let { err ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(err, color = MaterialTheme.colorScheme.error)
+                }
+                if (state.exportSheetsOk) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("Exportación enviada (revisa tu hoja y correo).")
+                }
             }
 
             if (state.loading) {

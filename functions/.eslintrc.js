@@ -18,9 +18,14 @@ module.exports = {
     sourceType: "module",
   },
   ignorePatterns: [
-    "/lib/**/*", // Ignore built files.
-    "/generated/**/*", // Ignore generated files.
+    "node_modules/**",
+    "lib/**",
+    "generated/**",
   ],
+  settings: {
+    // Evita que import/* resuelva paquetes bajo node_modules (muchísimos archivos → EMFILE en Windows).
+    "import/ignore": ["node_modules"],
+  },
   plugins: [
     "@typescript-eslint",
     "import",

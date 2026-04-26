@@ -8,3 +8,8 @@ typings/
 # Node.js dependency directory
 node_modules/
 *.local
+
+# Variables de entorno (webhook Apps Script, etc.)
+.env
+.env.*
+!.env.example

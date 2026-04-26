@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import envaxsantander.abrahamcaceres.cuadre_caja_app.data.CierreRepository
 import envaxsantander.abrahamcaceres.cuadre_caja_app.data.MovimientoCaja
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.functions.FirebaseFunctions
+import com.google.firebase.functions.FirebaseFunctionsException
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
@@ -131,6 +133,7 @@ class CierreCajaViewModel(
     }
 
     private var movimientosJob: Job? = null
+    private var cierreJob: Job? = null
 
     private fun observeMovimientos(usuarioId: String) {
         if (movimientosJob != null) return
@@ -181,9 +184,9 @@ class CierreCajaViewModel(
         val requiereAdmin = nivel == "CRITICAL" && s.rol != "admin"
 
         _state.update {
+            val zOk = it.estadoZ == "VALIDADO" || it.estadoZ == "WARNING"
             val puedeCerrarBase =
-                it.estadoZ != "PENDIENTE" &&
-                    it.estadoZ != "ERROR" &&
+                zOk &&
                     total > 0.0 &&
                     !it.cierreCompletado &&
                     it.puedeOperar
@@ -246,6 +249,7 @@ class CierreCajaViewModel(
                         loading = false,
                     )
                 }
+                observeCierreDoc(docId)
                 recalcular()
             } catch (t: Throwable) {
                 Log.e(tag, "uploadPdf: failed", t)
@@ -261,6 +265,35 @@ class CierreCajaViewModel(
         }
     }
 
+    private fun observeCierreDoc(cierreId: String) {
+        cierreJob?.cancel()
+        cierreJob = viewModelScope.launch {
+            repo.observeCierre(cierreId).collectLatest { data ->
+                val z = data?.get("z") as? Map<*, *>
+                val validacion = z?.get("validacion") as? String
+                val resumen = (z?.get("resumen") as? Map<*, *>) ?: emptyMap<Any?, Any?>()
+
+                val zResumen = ZResumen(
+                    ventas = (resumen["ventas"] as? Number)?.toDouble(),
+                    devoluciones = (resumen["devoluciones"] as? Number)?.toDouble(),
+                    neto = (resumen["neto"] as? Number)?.toDouble(),
+                    diffVsIngresosTotal = (resumen["diff_vs_ingresos_total"] as? Number)?.toDouble(),
+                    nivel = resumen["nivel"] as? String,
+                )
+
+                if (!validacion.isNullOrBlank()) {
+                    _state.update {
+                        it.copy(
+                            estadoZ = validacion,
+                            zResumen = zResumen,
+                        )
+                    }
+                    recalcular()
+                }
+            }
+        }
+    }
+
     private suspend fun guardarPdfEnFirestore(
         db: FirebaseFirestore,
         userId: String,
@@ -272,6 +305,11 @@ class CierreCajaViewModel(
             "z_pdf_url" to pdfUrl,
             "z_pdf_path" to storagePath,
             "estado" to "PDF_CARGADO",
+            "z" to mapOf(
+                "pdf_url" to pdfUrl,
+                "pdf_path" to storagePath,
+                "validacion" to "SUBIDO",
+            ),
             "created_at" to FieldValue.serverTimestamp(),
         )
 
@@ -291,7 +329,8 @@ class CierreCajaViewModel(
                 return@launch
             }
 
-            if (!(s.estadoZ != "PENDIENTE" && s.estadoZ != "ERROR" && s.totalContado > 0.0)) {
+            val zOk = s.estadoZ == "VALIDADO" || s.estadoZ == "WARNING"
+            if (!(zOk && s.totalContado > 0.0)) {
                 _state.update { it.copy(cierreError = "No se puede cerrar: falta Z o conteo.") }
                 return@launch
             }
@@ -389,6 +428,55 @@ class CierreCajaViewModel(
                     it.copy(
                         loading = false,
                         cierreError = t.message ?: t.javaClass.simpleName,
+                    )
+                }
+            }
+        }
+    }
+
+    /** Misma región que Cloud Functions (`exportarCierre`). */
+    private val functionsUsEast1: FirebaseFunctions by lazy {
+        FirebaseFunctions.getInstance("us-east1")
+    }
+
+    fun exportarCierre() {
+        val cid = _state.value.cierreDocId
+        if (cid.isNullOrBlank()) {
+            _state.update { it.copy(exportSheetsError = "Sin id de cierre (sube PDF y cierra primero).") }
+            return
+        }
+        if (!_state.value.cierreCompletado) {
+            _state.update { it.copy(exportSheetsError = "Completa el cierre antes de exportar.") }
+            return
+        }
+
+        viewModelScope.launch {
+            _state.update {
+                it.copy(exportSheetsLoading = true, exportSheetsError = null, exportSheetsOk = false)
+            }
+            try {
+                functionsUsEast1
+                    .getHttpsCallable("exportarCierre")
+                    .call(hashMapOf("cierreId" to cid))
+                    .await()
+                Log.d(tag, "exportarCierre: ok")
+                _state.update {
+                    it.copy(exportSheetsLoading = false, exportSheetsOk = true, exportSheetsError = null)
+                }
+            } catch (t: FirebaseFunctionsException) {
+                Log.e(tag, "exportarCierre: functions", t)
+                _state.update {
+                    it.copy(
+                        exportSheetsLoading = false,
+                        exportSheetsError = "${t.code}: ${t.message ?: t.details}",
+                    )
+                }
+            } catch (t: Throwable) {
+                Log.e(tag, "exportarCierre: failed", t)
+                _state.update {
+                    it.copy(
+                        exportSheetsLoading = false,
+                        exportSheetsError = t.message ?: t.javaClass.simpleName,
                     )
                 }
             }

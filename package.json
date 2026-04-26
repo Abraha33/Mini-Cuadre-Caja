@@ -1,0 +1,9 @@
+{
+  "name": "cuadre-caja-oficial",
+  "private": true,
+  "description": "Orquesta deploy: Apps Script (clasp) + build Functions + Firebase",
+  "scripts": {
+    "clasp:push": "npm --prefix google-apps-script install && npm --prefix google-apps-script run push",
+    "deploy:all": "npm run clasp:push && npm --prefix functions run build && firebase deploy --only functions,firestore:indexes"
+  }
+}

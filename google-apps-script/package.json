@@ -1,0 +1,10 @@
+{
+  "name": "cuadre-caja-apps-script",
+  "private": true,
+  "scripts": {
+    "push": "clasp push"
+  },
+  "devDependencies": {
+    "@google/clasp": "^3.1.3"
+  }
+}

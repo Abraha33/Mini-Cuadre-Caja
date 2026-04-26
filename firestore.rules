@@ -3,78 +3,163 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // --- helpers ---
     function signedIn() {
       return request.auth != null;
     }
 
+    function usuarioPath() {
+      return /databases/$(database)/documents/usuarios/$(request.auth.uid);
+    }
+
+    function usuarioDocExists() {
+      return exists(usuarioPath());
+    }
+
+    function usuarioRol() {
+      return usuarioDocExists() ? get(usuarioPath()).data.get('rol', '') : '';
+    }
+
+    function isAdmin() {
+      return signedIn() && usuarioDocExists() && usuarioRol() == 'admin';
+    }
+
+    /** Roles que pueden registrar operación de caja (no lectura global). */
+    function puedeOperarCaja() {
+      return signedIn() && usuarioDocExists()
+        && (usuarioRol() == 'admin' || usuarioRol() == 'cajero');
+    }
+
     function turnoAbierto(turnoId) {
       let t = get(/databases/$(database)/documents/turnos_caja/$(turnoId)).data;
-      return t.estado == "ABIERTO"
+      return t.estado == 'ABIERTO'
         && t.usuario_id == request.auth.uid
         && t.caja_id is string;
     }
 
-    // --- PERFIL DE USUARIO Y ROLES ---
-    // El usuario puede leer su propio perfil para saber si es admin/cajero
-    match /usuarios/{uid} {
-      allow read: if signedIn() && request.auth.uid == uid;
-      allow create: if signedIn() && request.auth.uid == uid;
-      allow update, delete: if false; // El rol solo se cambia desde consola/admin
+    // -----------------------------
+    // usuarios/{userId}
+    // Doc obligatorio para rol; create restringido (no auto-admin).
+    // -----------------------------
+    match /usuarios/{userId} {
+      allow read: if signedIn()
+        && (request.auth.uid == userId || isAdmin());
+
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['nombre', 'rol', 'activo'])
+        && request.resource.data.nombre is string
+        && request.resource.data.nombre.size() > 0
+        && request.resource.data.nombre.size() <= 200
+        && request.resource.data.rol is string
+        && request.resource.data.rol in ['cajero', 'auxiliar']
+        && request.resource.data.activo == true;
+
+      allow update, delete: if isAdmin();
     }
 
-    // --- MOVIMIENTOS ---
+    // -----------------------------
+    // operaciones_financieras (reservado / futuro)
+    // -----------------------------
+    match /operaciones_financieras/{id} {
+      allow read: if signedIn() && (isAdmin() || resource.data.get('usuario_id', '') == request.auth.uid);
+      allow create: if signedIn() && puedeOperarCaja()
+        && request.resource.data.usuario_id == request.auth.uid;
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // -----------------------------
+    // movimientos_caja
+    // -----------------------------
     match /movimientos_caja/{movId} {
-      allow read: if signedIn() && resource.data.usuario_id == request.auth.uid;
-      allow create: if signedIn()
+      allow read: if signedIn()
+        && (resource.data.usuario_id == request.auth.uid || isAdmin());
+
+      allow create: if signedIn() && puedeOperarCaja()
         && request.resource.data.usuario_id == request.auth.uid
         && request.resource.data.caja_id is string
         && request.resource.data.turno_id is string
-        && request.resource.data.caja_id == get(/databases/$(database)/documents/turnos_caja/$(request.resource.data.turno_id)).data.caja_id
+        && request.resource.data.tipo is string
+        && request.resource.data.metodo is string
+        && request.resource.data.monto is number
+        && request.resource.data.caja_id
+          == get(/databases/$(database)/documents/turnos_caja/$(request.resource.data.turno_id)).data.caja_id
         && turnoAbierto(request.resource.data.turno_id);
-      allow update, delete: if false;
+
+      allow update: if false;
+      allow delete: if isAdmin();
     }
 
-    // --- TURNOS ---
+    // -----------------------------
+    // turnos_caja
+    // -----------------------------
     match /turnos_caja/{turnoId} {
-      allow read: if signedIn() && resource.data.usuario_id == request.auth.uid;
+      allow read: if signedIn()
+        && (resource.data.usuario_id == request.auth.uid || isAdmin());
 
-      // Crear turno ABIERTO (uno por usuario/caja a la vez, validado por query de unicidad en app + reglas mínimas)
-      allow create: if signedIn()
+      allow create: if signedIn() && puedeOperarCaja()
         && request.resource.data.usuario_id == request.auth.uid
         && request.resource.data.caja_id is string
-        && request.resource.data.estado == "ABIERTO"
-        && !("fecha_fin" in request.resource.data)
-        && !("cierre_id" in request.resource.data);
+        && request.resource.data.estado == 'ABIERTO'
+        && !('fecha_fin' in request.resource.data)
+        && !('cierre_id' in request.resource.data);
 
-      // Cerrar turno (asociar cierre)
-      allow update: if signedIn()
+      allow update: if signedIn() && puedeOperarCaja()
         && resource.data.usuario_id == request.auth.uid
         && request.resource.data.usuario_id == request.auth.uid
-        && resource.data.estado == "ABIERTO"
-        && request.resource.data.estado == "CERRADO"
+        && resource.data.estado == 'ABIERTO'
+        && request.resource.data.estado == 'CERRADO'
         && request.resource.data.cierre_id is string;
 
-      allow delete: if false;
+      allow delete: if isAdmin();
     }
 
-    // --- CIERRES ---
+    // -----------------------------
+    // cierres_caja
+    // Inmutable tras COMPLETADO. El cliente legitima: PDF_CARGADO -> COMPLETADO (merge).
+    // Admin SDK (Functions) no pasa por estas reglas.
+    // -----------------------------
     match /cierres_caja/{cierreId} {
-      allow read: if signedIn() && resource.data.usuario_id == request.auth.uid;
-      allow create: if signedIn() && request.resource.data.usuario_id == request.auth.uid;
-      allow update: if signedIn()
+      allow read: if signedIn()
+        && (resource.data.usuario_id == request.auth.uid || isAdmin());
+
+      // Solo borrador PDF desde cliente; no crear cierre ya "cerrado" sin pasar por update.
+      allow create: if signedIn() && puedeOperarCaja()
+        && request.resource.data.usuario_id == request.auth.uid
+        && request.resource.data.estado == 'PDF_CARGADO'
+        && request.resource.data.z_pdf_path is string
+        && request.resource.data.z_pdf_url is string
+        && request.resource.data.z is map;
+
+      allow update: if signedIn() && puedeOperarCaja()
         && resource.data.usuario_id == request.auth.uid
-        && request.resource.data.usuario_id == request.auth.uid;
-      allow delete: if false;
+        && request.resource.data.usuario_id == resource.data.usuario_id
+        && resource.data.estado == 'PDF_CARGADO'
+        && request.resource.data.estado == 'COMPLETADO'
+        && request.resource.data.z_pdf_path == resource.data.z_pdf_path
+        && request.resource.data.z_pdf_url == resource.data.z_pdf_url
+        && request.resource.data.turno_id is string
+        && request.resource.data.caja_id is string;
+
+      allow delete: if isAdmin();
     }
 
-    // --- LOGS ---
+    // -----------------------------
+    // logs — cliente escribe auditoría de cierre; lectura solo admin.
+    // -----------------------------
     match /logs/{logId} {
-      allow read: if false;
-      allow create: if signedIn() && request.resource.data.usuario_id == request.auth.uid;
+      allow read: if isAdmin();
+
+      allow create: if signedIn() && puedeOperarCaja()
+        && request.resource.data.usuario_id == request.auth.uid
+        && request.resource.data.modulo is string
+        && request.resource.data.accion is string
+        && request.resource.data.referencia_id is string;
+
       allow update, delete: if false;
     }
 
-    // Default: denegar.
     match /{document=**} {
       allow read, write: if false;
     }

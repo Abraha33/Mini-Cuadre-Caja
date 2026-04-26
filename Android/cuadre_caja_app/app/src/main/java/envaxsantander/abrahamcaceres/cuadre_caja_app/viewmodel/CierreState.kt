@@ -37,10 +37,17 @@ data class CierreState(
     val canClose: Boolean = false,
     val cierreCompletado: Boolean = false,
     val cierreError: String? = null,
+
+    val exportSheetsLoading: Boolean = false,
+    val exportSheetsError: String? = null,
+    val exportSheetsOk: Boolean = false,
 )
 
 data class ZResumen(
-    val ventas: Double,
-    val devoluciones: Double,
+    val ventas: Double? = null,
+    val devoluciones: Double? = null,
+    val neto: Double? = null,
+    val diffVsIngresosTotal: Double? = null,
+    val nivel: String? = null,
 )
 
