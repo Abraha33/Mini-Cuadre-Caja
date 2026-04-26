@@ -1,0 +1,15 @@
+rules_version = '2';
+
+// Craft rules based on data in your Firestore database
+// allow write: if firestore.get(
+//    /databases/(default)/documents/users/$(request.auth.uid)).data.isAdmin;
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Informe Z: cada usuario solo puede leer/escribir su propio archivo.
+    // Ruta: cierres/{uid}_{timestamp}.pdf
+    match /cierres/{file} {
+      allow read, write: if request.auth != null
+        && file.matches(request.auth.uid + "_.*\\.pdf");
+    }
+  }
+}

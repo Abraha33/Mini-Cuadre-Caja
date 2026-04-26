@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "868390716970",
+    "firebase_url": "https://cuadre-caja-oficial-default-rtdb.firebaseio.com",
+    "project_id": "cuadre-caja-oficial",
+    "storage_bucket": "cuadre-caja-oficial.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:868390716970:android:640c6d385ed24baf3fa553",
+        "android_client_info": {
+          "package_name": "envaxsantander.abrahamcaceres.cuadre_caja_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCr6mCS37WEUKwu7-oxHI_qO9xqc1xaF8Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

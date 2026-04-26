@@ -1,0 +1,87 @@
+mutation CreateSeedData @transaction @auth(level: USER, insecureReason: "This is seed data intended to be run by any authenticated user for development purposes.") {
+  user_insertMany(data: [
+    {
+      id: "a1b2c3d4-e5f6-7890-1234-567890abcdef",
+      displayName: "Alice Smith",
+      email: "alice.smith@example.com",
+      createdAt: "2023-01-01T10:00:00Z"
+    },
+    {
+      id: "b2c3d4e5-f6a7-8901-2345-67890abcdef0",
+      displayName: "Bob Johnson",
+      email: "bob.johnson@example.com",
+      createdAt: "2023-01-01T10:05:00Z"
+    }
+  ])
+  customer_insertMany(data: [
+    {
+      id: "c3d4e5f6-a7b8-9012-3456-7890abcdef12",
+      userId: "a1b2c3d4-e5f6-7890-1234-567890abcdef",
+      firstName: "Alice",
+      lastName: "Smith",
+      email: "alice.smith@example.com",
+      phoneNumber: "555-111-2222",
+      address: "123 Main St, Anytown, USA",
+      createdAt: "2023-01-01T10:10:00Z"
+    },
+    {
+      id: "d4e5f6a7-b8c9-0123-4567-890abcdef123",
+      userId: "b2c3d4e5-f6a7-8901-2345-67890abcdef0",
+      firstName: "Bob",
+      lastName: "Johnson",
+      email: "bob.johnson@example.com",
+      phoneNumber: "555-333-4444",
+      address: "456 Oak Ave, Otherville, USA",
+      createdAt: "2023-01-01T10:15:00Z"
+    }
+  ])
+  product_insertMany(data: [
+    {
+      id: "e5f6a7b8-c9d0-1234-5678-90abcdef1234",
+      userId: "a1b2c3d4-e5f6-7890-1234-567890abcdef",
+      name: "Laptop Pro",
+      description: "Powerful laptop for professionals",
+      price: 1200.00,
+      stockQuantity: 50,
+      imageUrl: "https://example.com/laptop.jpg",
+      createdAt: "2023-01-01T10:20:00Z"
+    },
+    {
+      id: "f6a7b8c9-d0e1-2345-6789-0abcdef12345",
+      userId: "a1b2c3d4-e5f6-7890-1234-567890abcdef",
+      name: "Wireless Mouse",
+      description: "Ergonomic wireless mouse",
+      price: 25.00,
+      stockQuantity: 200,
+      imageUrl: "https://example.com/mouse.jpg",
+      createdAt: "2023-01-01T10:25:00Z"
+    }
+  ])
+  sale_insertMany(data: [
+    {
+      id: "12345678-90ab-cdef-0123-456789abcdef",
+      userId: "a1b2c3d4-e5f6-7890-1234-567890abcdef",
+      customerId: "c3d4e5f6-a7b8-9012-3456-7890abcdef12",
+      saleDate: "2023-01-02",
+      totalAmount: 1225.00,
+      paymentMethod: "Credit Card",
+      createdAt: "2023-01-02T11:00:00Z"
+    }
+  ])
+  saleItem_insertMany(data: [
+    {
+      id: "87654321-fedc-ba98-7654-3210fedcba98",
+      saleId: "12345678-90ab-cdef-0123-456789abcdef",
+      productId: "e5f6a7b8-c9d0-1234-5678-90abcdef1234",
+      quantity: 1,
+      priceAtSale: 1200.00
+    },
+    {
+      id: "76543210-fedc-ba98-7654-3210fedcba99",
+      saleId: "12345678-90ab-cdef-0123-456789abcdef",
+      productId: "f6a7b8c9-d0e1-2345-6789-0abcdef12345",
+      quantity: 1,
+      priceAtSale: 25.00
+    }
+  ])
+}

@@ -1,0 +1,47 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // --- PERFIL DE USUARIO Y ROLES ---
+    // El usuario puede leer su propio perfil para saber si es admin/cajero
+    match /usuarios/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create: if signedIn() && request.auth.uid == uid;
+      allow update, delete: if false; // El rol solo se cambia desde consola/admin
+    }
+
+    // --- MOVIMIENTOS ---
+    match /movimientos_caja/{movId} {
+      allow read: if signedIn() && resource.data.usuario_id == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.usuario_id == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // --- CIERRES ---
+    match /cierres_caja/{cierreId} {
+      allow read: if signedIn() && resource.data.usuario_id == request.auth.uid;
+      allow create: if signedIn() && request.resource.data.usuario_id == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.usuario_id == request.auth.uid
+        && request.resource.data.usuario_id == request.auth.uid;
+      allow delete: if false;
+    }
+
+    // --- LOGS ---
+    match /logs/{logId} {
+      allow read: if false;
+      allow create: if signedIn() && request.resource.data.usuario_id == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    // Default: denegar.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
