@@ -5,5 +5,8 @@
   "scripts": {
     "clasp:push": "npm --prefix google-apps-script install && npm --prefix google-apps-script run push",
     "deploy:all": "npm run clasp:push && npm --prefix functions run build && firebase deploy --only functions,firestore:indexes"
+  },
+  "dependencies": {
+    "firebase": "^12.12.1"
   }
 }
