@@ -256,6 +256,56 @@ export const procesarInformeZ = onObjectFinalized(
       const transferencias = cierreData?.resumen?.transferencias ?? 0;
       const ingresosTotal = Number(ingresosEfectivo) + Number(transferencias);
 
+      // Validación fuerte: neto debe existir y ser >= 0. Si no, marca ERROR y no continúa.
+      const neto = resumen.neto;
+      if (neto == null || !Number.isFinite(neto) || neto < 0) {
+        await cierreDoc.ref.set(
+          {
+            z: {
+              ...(cierreData?.z ?? {}),
+              resumen: {
+                ventas: resumen.ventas ?? null,
+                devoluciones: resumen.devoluciones ?? null,
+                neto: neto ?? null,
+                pagos: resumen.pagos ?? null,
+                ingresos_total: ingresosTotal,
+                diff_vs_ingresos_total: null,
+                nivel: "ERROR",
+              },
+              validacion: "ERROR",
+              error: "Z inválido: neto requerido (>= 0).",
+              processed_at: FieldValue.serverTimestamp(),
+            },
+          },
+          {merge: true}
+        );
+
+        await crearLog({
+          modulo: "cierre_caja",
+          accion: "VALIDATE_Z_FAILED",
+          referencia_id: cierreDoc.id,
+          usuario_id: uid,
+          rol: await getUserRole(uid),
+          detalle: {
+            reason: "NETO_MISSING_OR_INVALID",
+            neto: neto ?? null,
+            ingresosTotal: ingresosTotal ?? null,
+          },
+        });
+
+        await crearAlerta({
+          tipo: "Z_INVALID",
+          nivel: "ERROR",
+          modulo: "cierre_caja",
+          referencia_id: cierreDoc.id,
+          mensaje: "Informe Z inválido: neto faltante/negativo.",
+          usuario_id: uid,
+        });
+
+        logger.warn("procesarInformeZ: invalid neto", {cierreId: cierreDoc.id, uid, name});
+        return;
+      }
+
       let diffVsIngresosTotal: number | undefined;
       if (resumen.neto != null && Number.isFinite(ingresosTotal)) {
         diffVsIngresosTotal = resumen.neto - ingresosTotal;
@@ -377,18 +427,16 @@ type MovDocData = {
   created_at?: Timestamp;
 };
 
-/** Misma lógica que `CierreCajaViewModel.calcularResumen` (fuente: Firestore). */
-function resumenDesdeMovimientos(docs: QueryDocumentSnapshot[]): {
+/** Calcula resumen SOLO de efectivo desde `movimientos_caja` (server-authoritative). */
+function resumenEfectivoDesdeMovimientos(docs: QueryDocumentSnapshot[]): {
   ingresos: number;
   egresos: number;
-  transferencias: number;
   saldoEsperado: number;
   fechaInicio: Timestamp | null;
   fechaFin: Timestamp | null;
 } {
   let ingresos = 0;
   let egresos = 0;
-  let transferencias = 0;
   const times: Timestamp[] = [];
 
   for (const d of docs) {
@@ -402,8 +450,6 @@ function resumenDesdeMovimientos(docs: QueryDocumentSnapshot[]): {
     if (metodo === "efectivo") {
       if (tipo === "ingreso") ingresos += monto;
       else egresos += monto;
-    } else {
-      transferencias += monto;
     }
   }
 
@@ -414,22 +460,51 @@ function resumenDesdeMovimientos(docs: QueryDocumentSnapshot[]): {
   return {
     ingresos,
     egresos,
-    transferencias,
     saldoEsperado: ingresos - egresos,
     fechaInicio,
     fechaFin,
   };
 }
 
-function nivelPorDiferencia(absDiff: number): "LOW" | "MEDIUM" | "CRITICAL" {
-  if (absDiff <= 5000) return "LOW";
-  if (absDiff <= 20000) return "MEDIUM";
+type CrearCierreInput = {
+  turnoId: string;
+  conteo: {monedas: number; billetes: number};
+  zData: {ventas: number; devoluciones: number; neto: number};
+  clientRequestId: string;
+};
+
+type CrearCierreOutput = {
+  ok: true;
+  cierreId: string;
+  diferencia: number;
+  nivel: "LOW" | "WARNING" | "CRITICAL";
+  validacionZ: "OK" | "WARNING" | "CRITICAL";
+};
+
+function requireNonEmptyString(v: unknown, field: string): string {
+  const s = typeof v === "string" ? v.trim() : "";
+  if (!s) throw new HttpsError("invalid-argument", `Campo requerido: ${field}`);
+  return s;
+}
+
+function requireFiniteNumber(v: unknown, field: string): number {
+  const n = typeof v === "number" ? v : Number(v);
+  if (!Number.isFinite(n)) {
+    throw new HttpsError("invalid-argument", `Campo inválido: ${field}`);
+  }
+  return n;
+}
+
+function zValidationFromDiff(absDiff: number): "OK" | "WARNING" | "CRITICAL" {
+  if (absDiff === 0) return "OK";
+  if (absDiff <= 5000) return "WARNING";
   return "CRITICAL";
 }
 
-function numInput(v: unknown): number {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : 0;
+function nivelDiferenciaFromAbs(absDiff: number): "LOW" | "WARNING" | "CRITICAL" {
+  if (absDiff <= 5000) return "LOW";
+  if (absDiff <= 20000) return "WARNING";
+  return "CRITICAL";
 }
 
 /**
@@ -447,204 +522,274 @@ export const crearCierre = onCall(
       throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
     }
 
-    const data = (request.data ?? {}) as Record<string, unknown>;
-    const turnoId = String(data.turnoId ?? "").trim();
-    const cajaId = String(data.cajaId ?? "").trim();
-    const cierreDocId = String(data.cierreDocId ?? "").trim();
-    const conteo = (data.conteo ?? {}) as Record<string, unknown>;
-
-    if (!turnoId || !cajaId || !cierreDocId) {
-      throw new HttpsError(
-        "invalid-argument",
-        "Faltan turnoId, cajaId o cierreDocId."
-      );
-    }
-
-    const monedas = numInput(conteo.monedas);
-    const billetes = numInput(conteo.billetes);
-    const totalContado = monedas + billetes;
-    if (totalContado <= 0) {
-      throw new HttpsError(
-        "invalid-argument",
-        "El conteo (monedas + billetes) debe ser mayor que cero."
-      );
-    }
-
-    const db = getFirestore();
-    const rol = await getUserRole(uid);
-
-    const turnoRef = db.collection("turnos_caja").doc(turnoId);
-    const cierreRef = db.collection("cierres_caja").doc(cierreDocId);
-    const movQuery = db
-      .collection("movimientos_caja")
-      .where("turno_id", "==", turnoId)
-      .where("usuario_id", "==", uid);
-
     try {
-      const result = await db.runTransaction(async (transaction) => {
-        const [turnoSnap, cierreSnap, movSnap] = await Promise.all([
-          transaction.get(turnoRef),
-          transaction.get(cierreRef),
-          transaction.get(movQuery),
-        ]);
+      const raw = (request.data ?? {}) as Record<string, unknown>;
+      const input: CrearCierreInput = {
+        turnoId: requireNonEmptyString(raw.turnoId, "turnoId"),
+        clientRequestId: requireNonEmptyString(raw.clientRequestId, "clientRequestId"),
+        conteo: {
+          monedas: requireFiniteNumber((raw.conteo as any)?.monedas, "conteo.monedas"),
+          billetes: requireFiniteNumber((raw.conteo as any)?.billetes, "conteo.billetes"),
+        },
+        zData: {
+          ventas: requireFiniteNumber((raw.zData as any)?.ventas, "zData.ventas"),
+          devoluciones: requireFiniteNumber(
+            (raw.zData as any)?.devoluciones,
+            "zData.devoluciones"
+          ),
+          neto: requireFiniteNumber((raw.zData as any)?.neto, "zData.neto"),
+        },
+      };
 
-        if (!turnoSnap.exists) {
-          throw new HttpsError("not-found", "Turno no encontrado.");
+      if (input.clientRequestId.length > 200) {
+        throw new HttpsError("invalid-argument", "clientRequestId demasiado largo.");
+      }
+
+      if (input.conteo.monedas < 0 || input.conteo.billetes < 0) {
+        throw new HttpsError(
+          "invalid-argument",
+          "El conteo (monedas/billetes) no puede ser negativo."
+        );
+      }
+
+      const totalContado = input.conteo.monedas + input.conteo.billetes;
+      if (totalContado <= 0) {
+        throw new HttpsError(
+          "invalid-argument",
+          "El conteo (monedas + billetes) debe ser mayor que cero."
+        );
+      }
+
+      // Validación ZData fuerte (no confiar en cliente; mínimo: coherencia numérica).
+      if (input.zData.ventas < 0 || input.zData.devoluciones < 0 || input.zData.neto < 0) {
+        throw new HttpsError("invalid-argument", "zData inválido (valores negativos).");
+      }
+
+      const erpNeto = input.zData.ventas - input.zData.devoluciones;
+      const zAbsDiff = Math.abs(erpNeto - input.zData.neto);
+      const validacionZ = zValidationFromDiff(zAbsDiff);
+
+      const db = getFirestore();
+      const rol = await getUserRole(uid);
+      if (rol !== "admin" && rol !== "cajero") {
+        throw new HttpsError("permission-denied", "Rol no autorizado.");
+      }
+
+      const idempoRef = db.collection("idempotency_keys").doc(input.clientRequestId);
+
+      // Fast-path: si ya existe, devuelve el resultado previo.
+      const existing = await idempoRef.get();
+      if (existing.exists) {
+        const prev = existing.data() as {response?: CrearCierreOutput} | undefined;
+        if (prev?.response?.ok) return prev.response;
+      }
+
+      const output = await db.runTransaction(async (tx) => {
+        const idemSnap = await tx.get(idempoRef);
+        if (idemSnap.exists) {
+          const prev = idemSnap.data() as {response?: CrearCierreOutput} | undefined;
+          if (prev?.response?.ok) return prev.response;
+          throw new HttpsError("failed-precondition", "Idempotency key ya usada.");
         }
+
+        const turnoRef = db.collection("turnos_caja").doc(input.turnoId);
+        const turnoSnap = await tx.get(turnoRef);
+        if (!turnoSnap.exists) throw new HttpsError("not-found", "Turno no encontrado.");
+
         const turno = turnoSnap.data() as Record<string, unknown>;
-        if (String(turno.usuario_id ?? "") !== uid) {
-          throw new HttpsError(
-            "permission-denied",
-            "Este turno no pertenece al usuario."
-          );
-        }
-        if (String(turno.caja_id ?? "") !== cajaId) {
-          throw new HttpsError(
-            "failed-precondition",
-            "La caja no coincide con el turno."
-          );
-        }
         if (String(turno.estado ?? "") !== "ABIERTO") {
-          throw new HttpsError(
-            "failed-precondition",
-            "El turno ya está cerrado o no está abierto."
-          );
+          throw new HttpsError("failed-precondition", "Turno no abierto.");
         }
 
-        if (!cierreSnap.exists) {
-          throw new HttpsError("not-found", "Cierre borrador no encontrado.");
-        }
-        const draft = cierreSnap.data() as Record<string, unknown>;
-        if (String(draft.usuario_id ?? "") !== uid) {
-          throw new HttpsError(
-            "permission-denied",
-            "Este cierre no pertenece al usuario."
-          );
-        }
-        if (String(draft.estado ?? "") === "COMPLETADO") {
-          throw new HttpsError(
-            "failed-precondition",
-            "Este cierre ya está completado."
-          );
-        }
-        if (String(draft.estado ?? "") !== "PDF_CARGADO") {
-          throw new HttpsError(
-            "failed-precondition",
-            "El cierre debe estar en estado PDF_CARGADO."
-          );
+        // Defensa en profundidad: cajero solo puede cerrar su turno.
+        const turnoUsuario = String(turno.usuario_id ?? "");
+        if (rol !== "admin" && turnoUsuario && turnoUsuario !== uid) {
+          throw new HttpsError("permission-denied", "Este turno no pertenece al usuario.");
         }
 
-        const z = (draft.z ?? {}) as Record<string, unknown>;
-        const zValidacion = String(z.validacion ?? "");
-        if (zValidacion !== "VALIDADO" && zValidacion !== "WARNING") {
-          throw new HttpsError(
-            "failed-precondition",
-            "Informe Z debe estar VALIDADO o WARNING antes de cerrar."
-          );
+        const movQuery = db
+          .collection("movimientos_caja")
+          .where("turno_id", "==", input.turnoId);
+        const opQuery = db
+          .collection("operaciones_financieras")
+          .where("turno_id", "==", input.turnoId);
+
+        const [movSnap, opSnap] = await Promise.all([tx.get(movQuery), tx.get(opQuery)]);
+
+        const r = resumenEfectivoDesdeMovimientos(movSnap.docs);
+
+        // Transferencias desde operaciones_financieras (suma total).
+        let transferencias = 0;
+        for (const d of opSnap.docs) {
+          const data = d.data() as Record<string, unknown>;
+          const monto = typeof data.monto === "number" ? data.monto : Number(data.monto);
+          if (Number.isFinite(monto)) transferencias += monto;
         }
 
-        const movDocs = movSnap.docs;
-        const r = resumenDesdeMovimientos(movDocs);
-        const diferencia = totalContado - r.saldoEsperado;
-        const nivel = nivelPorDiferencia(Math.abs(diferencia));
+        const saldoEsperado = r.saldoEsperado;
+        const diferencia = totalContado - saldoEsperado;
+        const nivel = nivelDiferenciaFromAbs(Math.abs(diferencia));
 
-        if (nivel === "CRITICAL" && rol !== "admin") {
-          throw new HttpsError(
-            "permission-denied",
-            "Diferencia CRITICAL: requiere rol admin para cerrar."
-          );
-        }
+        const cierreRef = db.collection("cierres_caja").doc();
+        const cierreId = cierreRef.id;
 
         const fechaInicio = r.fechaInicio ?? Timestamp.now();
         const fechaFin = r.fechaFin ?? Timestamp.now();
 
-        transaction.set(
-          cierreRef,
-          {
-            caja_id: cajaId,
-            usuario_id: uid,
-            turno_id: turnoId,
-            fecha_inicio: fechaInicio,
-            fecha_fin: fechaFin,
-            resumen: {
-              ingresos_efectivo: r.ingresos,
-              egresos_efectivo: r.egresos,
-              saldo_esperado: r.saldoEsperado,
-              transferencias: r.transferencias,
-            },
-            conteo: {
-              monedas,
-              billetes,
-              total: totalContado,
-            },
-            diferencia,
-            nivel,
-            estado: "COMPLETADO",
-            completed_at: FieldValue.serverTimestamp(),
-          },
-          {merge: true}
-        );
-
-        transaction.update(turnoRef, {
-          estado: "CERRADO",
-          cierre_id: cierreDocId,
-          fecha_fin: FieldValue.serverTimestamp(),
-        });
-
-        return {
-          cierreId: cierreDocId,
-          diferencia,
-          nivel,
-          zValidacion,
+        tx.set(cierreRef, {
+          usuario_id: uid,
+          turno_id: input.turnoId,
+          estado: "COMPLETADO",
+          fecha_inicio: fechaInicio,
+          fecha_fin: fechaFin,
           resumen: {
             ingresos_efectivo: r.ingresos,
             egresos_efectivo: r.egresos,
-            saldo_esperado: r.saldoEsperado,
-            transferencias: r.transferencias,
+            saldo_esperado: saldoEsperado,
+            transferencias,
           },
+          conteo: {
+            monedas: input.conteo.monedas,
+            billetes: input.conteo.billetes,
+            total: totalContado,
+          },
+          diferencia,
+          nivel,
+          z: {
+            fuente: "client_payload",
+            resumen: {
+              ventas: input.zData.ventas,
+              devoluciones: input.zData.devoluciones,
+              neto: input.zData.neto,
+              erp_neto: erpNeto,
+              diff_vs_erp_neto: erpNeto - input.zData.neto,
+            },
+            validacion: validacionZ,
+          },
+          completed_at: FieldValue.serverTimestamp(),
+        });
+
+        tx.update(turnoRef, {
+          estado: "CERRADO",
+          cierre_id: cierreId,
+          fecha_fin: FieldValue.serverTimestamp(),
+        });
+
+        // Log append-only (en transacción)
+        const logRef = db.collection("logs").doc();
+        tx.set(logRef, {
+          modulo: "cierre_caja",
+          accion: "CREATE",
+          referencia_id: cierreId,
+          usuario_id: uid,
+          rol,
+          detalle: {
+            turnoId: input.turnoId,
+            diferencia,
+            nivel,
+            validacionZ,
+          },
+          timestamp: FieldValue.serverTimestamp(),
+        });
+
+        // Export job (pendiente)
+        const exportRef = db.collection("export_jobs").doc();
+        tx.set(exportRef, {
+          cierre_id: cierreId,
+          turno_id: input.turnoId,
+          usuario_id: uid,
+          status: "PENDING",
+          created_at: FieldValue.serverTimestamp(),
+          attempts: 0,
+          last_error: null,
+        });
+
+        // Alerta si diferencia CRITICAL
+        if (nivel === "CRITICAL") {
+          const alertaRef = db.collection("alertas").doc();
+          tx.set(alertaRef, {
+            tipo: "DIFERENCIA_CRITICAL",
+            nivel: "CRITICAL",
+            modulo: "cierre_caja",
+            referencia_id: cierreId,
+            mensaje: `Diferencia crítica detectada: ${diferencia}`,
+            usuario_id: uid,
+            estado: "PENDIENTE",
+            created_at: FieldValue.serverTimestamp(),
+            resolved_at: null,
+          });
+        }
+
+        const response: CrearCierreOutput = {
+          ok: true,
+          cierreId,
+          diferencia,
+          nivel,
+          validacionZ,
         };
+
+        // Idempotency record con respuesta completa
+        tx.set(idempoRef, {
+          uid,
+          turno_id: input.turnoId,
+          created_at: FieldValue.serverTimestamp(),
+          response,
+        });
+
+        return response;
       });
 
+      logger.info("crearCierre: success", {
+        uid,
+        turnoId: input.turnoId,
+        cierreId: output.cierreId,
+        clientRequestId: input.clientRequestId,
+      });
+
+      return output;
+    } catch (e) {
+      const maybeHttpsCode =
+        e instanceof HttpsError
+          ? e.code
+          : typeof (e as any)?.code === "string"
+            ? String((e as any).code)
+            : "";
+
+      const msg = String((e as any)?.message ?? e);
       await crearLog({
         modulo: "cierre_caja",
-        accion: "CREATE",
-        referencia_id: result.cierreId,
+        accion: "CREATE_FAILED",
+        referencia_id: undefined,
         usuario_id: uid,
-        rol,
+        rol: await getUserRole(uid),
         detalle: {
-          diferencia: result.diferencia,
-          nivel: result.nivel,
-          validacionZ: result.zValidacion,
+          // payload no se confía, pero ayudamos a soporte con estos IDs si venían.
+          turnoId: String((request.data as any)?.turnoId ?? ""),
+          clientRequestId: String((request.data as any)?.clientRequestId ?? ""),
+          code: maybeHttpsCode || null,
+          message: msg,
         },
       });
 
-      if (result.nivel === "CRITICAL") {
-        await crearAlerta({
-          tipo: "DIFERENCIA_CRITICAL",
-          nivel: result.nivel,
-          modulo: "cierre_caja",
-          referencia_id: result.cierreId,
-          mensaje: `Diferencia crítica detectada: ${result.diferencia}`,
-          usuario_id: uid,
-        });
+      logger.warn("crearCierre: failed", {
+        uid,
+        turnoId: String((request.data as any)?.turnoId ?? ""),
+        code: maybeHttpsCode || undefined,
+        message: msg,
+      });
+
+      // Evita alertas CRITICAL del sistema para errores esperados/operativos (input/estado/permisos).
+      if (
+        !(e instanceof HttpsError) ||
+        (e.code !== "invalid-argument" &&
+          e.code !== "failed-precondition" &&
+          e.code !== "permission-denied" &&
+          e.code !== "not-found" &&
+          e.code !== "unauthenticated")
+      ) {
+        await logError(e, uid);
       }
 
-      // En este sistema, Z está OK cuando `procesarInformeZ` marcó VALIDADO.
-      if (result.zValidacion !== "VALIDADO") {
-        await crearAlerta({
-          tipo: "Z_MISMATCH",
-          nivel: result.zValidacion,
-          modulo: "cierre_caja",
-          referencia_id: result.cierreId,
-          mensaje: "Z no coincide con ERP",
-          usuario_id: uid,
-        });
-      }
-
-      logger.info("crearCierre: success", {uid, cierreId: cierreDocId, turnoId});
-      return {ok: true, ...result};
-    } catch (e) {
-      await logError(e, uid);
       throw e;
     }
   }
@@ -766,19 +911,18 @@ export const exportarCierre = onCall(
     const z = (cierre.z ?? {}) as Record<string, unknown>;
 
     const turnoId = String(cierre.turno_id ?? "");
-    let movSnap;
-    if (turnoId) {
-      movSnap = await db
-        .collection("movimientos_caja")
-        .where("usuario_id", "==", uid)
-        .where("turno_id", "==", turnoId)
-        .get();
-    } else {
-      movSnap = await db
-        .collection("movimientos_caja")
-        .where("usuario_id", "==", uid)
-        .get();
+    if (!turnoId) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Cierre inválido: no tiene turno_id y no es exportable."
+      );
     }
+
+    const movSnap = await db
+      .collection("movimientos_caja")
+      .where("turno_id", "==", turnoId)
+      .orderBy("created_at", "asc")
+      .get();
 
     const movimientos = movSnap.docs.map((d) => serializeMovimiento(d));
 

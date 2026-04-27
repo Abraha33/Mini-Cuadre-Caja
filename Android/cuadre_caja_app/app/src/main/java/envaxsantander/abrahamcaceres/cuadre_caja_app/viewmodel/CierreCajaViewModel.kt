@@ -338,6 +338,53 @@ class CierreCajaViewModel(
             }
 
             try {
+                val payload = hashMapOf(
+                    "turnoId" to turnoId,
+                    "cajaId" to s.cajaId,
+                    "cierreDocId" to cierreDocId,
+                    "conteo" to mapOf(
+                        "monedas" to (s.monedas.toDoubleOrNull() ?: 0.0),
+                        "billetes" to (s.billetes.toDoubleOrNull() ?: 0.0),
+                    ),
+                )
+
+                val result = functionsUsEast1
+                    .getHttpsCallable("crearCierre")
+                    .call(payload)
+                    .await()
+                    .getData() as? Map<*, *>
+
+                val diferenciaSrv = (result?.get("diferencia") as? Number)?.toDouble() ?: s.diferencia
+                val nivelSrv = result?.get("nivel") as? String ?: s.nivel
+                val resumenMap = result?.get("resumen") as? Map<*, *>
+                val ingSrv = (resumenMap?.get("ingresos_efectivo") as? Number)?.toDouble()
+                val egrSrv = (resumenMap?.get("egresos_efectivo") as? Number)?.toDouble()
+                val saldoSrv = (resumenMap?.get("saldo_esperado") as? Number)?.toDouble()
+                val transSrv = (resumenMap?.get("transferencias") as? Number)?.toDouble()
+
+                _state.update {
+                    it.copy(
+                        loading = false,
+                        cierreCompletado = true,
+                        canClose = false,
+                        puedeOperar = false,
+                        turnoEstado = "CERRADO",
+                        turnoBloqueoMsg = "Caja cerrada (turno cerrado).",
+                        diferencia = diferenciaSrv,
+                        nivel = nivelSrv,
+                        ingresos = ingSrv ?: it.ingresos,
+                        egresos = egrSrv ?: it.egresos,
+                        saldoEsperado = saldoSrv ?: it.saldoEsperado,
+                        transferencias = transSrv ?: it.transferencias,
+                    )
+                }
+                recalcular()
+            } catch (t: FirebaseFunctionsException) {
+                Log.e(tag, "guardarCierre: functions", t)
+                _state.update {
+                    it.copy(
+                        loading = false,
+                        cierreError = "${t.code}: ${t.message ?: t.details}",
                 val monedas = s.monedas.toDoubleOrNull() ?: 0.0
                 val billetes = s.billetes.toDoubleOrNull() ?: 0.0
 
