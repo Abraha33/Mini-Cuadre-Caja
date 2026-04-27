@@ -1,5 +1,6 @@
 package envaxsantander.abrahamcaceres.cuadre_caja_app.viewmodel
 
+import android.content.ContentResolver
 import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -8,12 +9,11 @@ import envaxsantander.abrahamcaceres.cuadre_caja_app.data.CierreRepository
 import envaxsantander.abrahamcaceres.cuadre_caja_app.data.MovimientoCaja
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.Timestamp
-import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.storage.FirebaseStorage
-import com.google.firebase.storage.StorageException
 import envaxsantander.abrahamcaceres.cuadre_caja_app.domain.Result
+import envaxsantander.abrahamcaceres.cuadre_caja_app.domain.UploadInformeZUseCase
 import envaxsantander.abrahamcaceres.cuadre_caja_app.domain.toUserMessage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,6 +25,7 @@ import kotlinx.coroutines.tasks.await
 class CierreCajaViewModel(
     private val repo: CierreRepository = CierreRepository(),
     private val auth: FirebaseAuth = FirebaseAuth.getInstance(),
+    private val uploadInformeZ: UploadInformeZUseCase = UploadInformeZUseCase(),
 ) : ViewModel() {
     private val tag = "CierreCaja"
 
@@ -43,6 +44,7 @@ class CierreCajaViewModel(
     }
 
     override fun onCleared() {
+        zUploadJob?.cancel()
         auth.removeAuthStateListener(authStateListener)
         super.onCleared()
     }
@@ -139,6 +141,7 @@ class CierreCajaViewModel(
 
     private var movimientosJob: Job? = null
     private var cierreJob: Job? = null
+    private var zUploadJob: Job? = null
 
     private fun observeMovimientos(usuarioId: String) {
         if (movimientosJob != null) return
@@ -189,7 +192,8 @@ class CierreCajaViewModel(
             val rolOk = it.rol == "admin" || it.rol == "cajero"
             // “Cliente tonto”: no decidir CRITICAL/WARNING aquí.
             // Si backend requiere admin, responderá PERMISSION_DENIED.
-            val puedeCerrar = puedeCerrarBase && rolOk && !it.loading && !it.cierreCompletado
+            val puedeCerrar =
+                puedeCerrarBase && rolOk && !it.cargandoCierre && !it.cierreCompletado
 
             it.copy(
                 totalContado = total,
@@ -198,7 +202,7 @@ class CierreCajaViewModel(
         }
     }
 
-    fun uploadPdf(uri: Uri) {
+    fun uploadPdf(uri: Uri, contentResolver: ContentResolver) {
         val userId = auth.currentUser?.uid
         if (userId.isNullOrBlank()) {
             _state.update { it.copy(estadoZ = "ERROR", cierreError = "No autenticado: inicia sesión para subir PDF.") }
@@ -212,54 +216,88 @@ class CierreCajaViewModel(
             return
         }
 
-        val storage = FirebaseStorage.getInstance()
-        val db = FirebaseFirestore.getInstance()
-
-        val fileName = "cierres/${userId}_${System.currentTimeMillis()}.pdf"
-        val ref = storage.reference.child(fileName)
-
-        _state.update { it.copy(loading = true, estadoZ = "SUBIENDO", cierreError = null) }
-
-        viewModelScope.launch {
-            try {
-                Log.d(tag, "uploadPdf: putFile uri=$uri path=$fileName")
-                ref.putFile(uri).await()
-                val url = ref.downloadUrl.await().toString()
-                Log.d(tag, "uploadPdf: uploaded url=$url")
-
-                val docId = guardarPdfEnFirestore(
-                    db = db,
-                    userId = userId,
-                    pdfUrl = url,
-                    storagePath = fileName,
+        zUploadJob?.cancel()
+        zUploadJob = viewModelScope.launch {
+            cierreJob?.cancel()
+            cierreJob = null
+            _state.update {
+                it.copy(
+                    subiendoInformeZ = true,
+                    progresoSubidaInformeZ = 0f,
+                    estadoZ = "SUBIENDO",
+                    cierreError = null,
+                    zPdfUrl = null,
+                    zPdfPath = null,
+                    cierreDocId = null,
+                    zResumen = null,
                 )
-                Log.d(tag, "uploadPdf: firestore docId=$docId")
-
+            }
+            recalcular()
+            try {
+                Log.d(tag, "uploadPdf: start uri=$uri")
+                when (
+                    val res = uploadInformeZ(
+                        resolver = contentResolver,
+                        uri = uri,
+                        userId = userId,
+                        onProgress = { done, total ->
+                            if (total > 0L) {
+                                val p = (done.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+                                _state.update { s -> s.copy(progresoSubidaInformeZ = p) }
+                            }
+                        },
+                    )
+                ) {
+                    is Result.Ok -> {
+                        val ok = res.data
+                        Log.d(tag, "uploadPdf: ok docId=${ok.cierreDocId}")
+                        _state.update {
+                            it.copy(
+                                estadoZ = "SUBIDO",
+                                zPdfUrl = ok.downloadUrl,
+                                zPdfPath = ok.storagePath,
+                                cierreDocId = ok.cierreDocId,
+                            )
+                        }
+                        observeCierreDoc(ok.cierreDocId)
+                        recalcular()
+                    }
+                    is Result.Err -> {
+                        Log.e(tag, "uploadPdf: use case error=${res.error}")
+                        _state.update {
+                            it.copy(
+                                estadoZ = "ERROR",
+                                cierreError = res.error.toUserMessage(),
+                            )
+                        }
+                        recalcular()
+                    }
+                }
+            } catch (t: CancellationException) {
+                Log.d(tag, "uploadPdf: cancelled")
                 _state.update {
                     it.copy(
-                        estadoZ = "SUBIDO",
-                        zPdfUrl = url,
-                        zPdfPath = fileName,
-                        cierreDocId = docId,
-                        loading = false,
+                        estadoZ = if (it.estadoZ == "SUBIENDO") "PENDIENTE" else it.estadoZ,
+                        cierreError = null,
                     )
                 }
-                observeCierreDoc(docId)
                 recalcular()
+                throw t
             } catch (t: Throwable) {
-                Log.e(tag, "uploadPdf: failed", t)
-                val msg = when (t) {
-                    is StorageException ->
-                        "No se pudo subir el PDF (${t.errorCode}). Revisa conexión, espacio y permisos."
-                    else ->
-                        (t.message?.takeIf { it.isNotBlank() })
-                            ?: "Error al subir el informe Z. Vuelve a intentarlo."
-                }
+                Log.e(tag, "uploadPdf: unexpected failure", t)
                 _state.update {
                     it.copy(
                         estadoZ = "ERROR",
-                        loading = false,
-                        cierreError = msg,
+                        cierreError = t.message?.takeIf { m -> m.isNotBlank() }
+                            ?: "Error al subir el informe Z. Vuelve a intentarlo.",
+                    )
+                }
+                recalcular()
+            } finally {
+                _state.update {
+                    it.copy(
+                        subiendoInformeZ = false,
+                        progresoSubidaInformeZ = 0f,
                     )
                 }
                 recalcular()
@@ -299,6 +337,7 @@ class CierreCajaViewModel(
                     nuevoEstadoZ == "ERROR" ->
                         "No se pudo validar el informe Z. Revisa el PDF e inténtalo de nuevo."
                     nuevoEstadoZ == "VALIDADO" || nuevoEstadoZ == "WARNING" -> null
+                    nuevoEstadoZ == "SUBIDO" -> null
                     else -> _state.value.cierreError
                 }
 
@@ -314,30 +353,8 @@ class CierreCajaViewModel(
         }
     }
 
-    private suspend fun guardarPdfEnFirestore(
-        db: FirebaseFirestore,
-        userId: String,
-        pdfUrl: String,
-        storagePath: String,
-    ): String {
-        val data = mapOf(
-            "usuario_id" to userId,
-            "z_pdf_url" to pdfUrl,
-            "z_pdf_path" to storagePath,
-            "estado" to "PDF_CARGADO",
-            "z" to mapOf(
-                "pdf_url" to pdfUrl,
-                "pdf_path" to storagePath,
-                "validacion" to "SUBIDO",
-            ),
-            "created_at" to FieldValue.serverTimestamp(),
-        )
-
-        val ref = db.collection("cierres_caja").add(data).await()
-        return ref.id
-    }
-
     fun guardarCierre() {
+        if (_state.value.cargandoCierre || _state.value.subiendoInformeZ) return
         viewModelScope.launch {
             if (auth.currentUser?.uid == null) return@launch
 
@@ -360,12 +377,15 @@ class CierreCajaViewModel(
                 return@launch
             }
 
-            _state.update { it.copy(loading = true, cierreError = null) }
+            _state.update { it.copy(cargandoCierre = true, cierreError = null) }
 
             val cierreDocId = s.cierreDocId
             if (cierreDocId.isNullOrBlank()) {
                 _state.update {
-                    it.copy(loading = false, cierreError = "Falta id de cierre (sube el PDF del informe Z primero).")
+                    it.copy(
+                        cargandoCierre = false,
+                        cierreError = "Falta id de cierre (sube el PDF del informe Z primero).",
+                    )
                 }
                 return@launch
             }
@@ -387,7 +407,7 @@ class CierreCajaViewModel(
                         val r = res.data
                         _state.update {
                             it.copy(
-                                loading = false,
+                                cargandoCierre = false,
                                 cierreCompletado = true,
                                 canClose = false,
                                 puedeOperar = false,
@@ -406,7 +426,7 @@ class CierreCajaViewModel(
                     is Result.Err -> {
                         _state.update {
                             it.copy(
-                                loading = false,
+                                cargandoCierre = false,
                                 cierreError = res.error.toUserMessage(),
                             )
                         }
@@ -417,7 +437,7 @@ class CierreCajaViewModel(
                 Log.e(tag, "guardarCierre: failed", t)
                 _state.update {
                     it.copy(
-                        loading = false,
+                        cargandoCierre = false,
                         cierreError = t.message ?: t.javaClass.simpleName,
                     )
                 }

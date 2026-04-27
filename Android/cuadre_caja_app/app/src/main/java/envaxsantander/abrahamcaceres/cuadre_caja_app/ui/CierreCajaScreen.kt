@@ -1,5 +1,6 @@
 package envaxsantander.abrahamcaceres.cuadre_caja_app.ui
 
+import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +26,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -37,18 +39,32 @@ fun CierreCajaScreen(
     onSignOut: () -> Unit = {},
 ) {
     val state by viewModel.state.collectAsState()
+    val context = LocalContext.current
 
-    val launcher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent(),
+    val openPdfLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
     ) { uri ->
-        uri?.let { viewModel.uploadPdf(it) }
+        if (uri == null) return@rememberLauncherForActivityResult
+        try {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+            )
+        } catch (_: SecurityException) {
+            // Algunos proveedores no exponen permiso persistente; la lectura puede seguir funcionando.
+        }
+        viewModel.uploadPdf(uri, context.contentResolver)
     }
+
+    val bloqueaPorCierre = state.cargandoCierre
+    val bloqueaSubidaZ = state.subiendoInformeZ
+    val muestraProgreso = state.subiendoInformeZ || state.cargandoCierre
 
     Surface(color = MaterialTheme.colorScheme.background) {
         Column(modifier = modifier.fillMaxSize()) {
             Column(
                 modifier = Modifier
-                    .weight(1f)
+                    .weight(1f, fill = true)
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -59,7 +75,7 @@ fun CierreCajaScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text("Cierre de Caja", style = MaterialTheme.typography.headlineSmall)
-                    TextButton(onClick = onSignOut, enabled = !state.loading) {
+                    TextButton(onClick = onSignOut, enabled = !bloqueaPorCierre && !bloqueaSubidaZ) {
                         Text("Cerrar sesión")
                     }
                 }
@@ -107,11 +123,28 @@ fun CierreCajaScreen(
 
                         Spacer(Modifier.height(8.dp))
 
-                        Button(
-                            onClick = { launcher.launch("application/pdf") },
-                            enabled = state.puedeOperar && !state.loading,
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            Text("Subir Informe Z")
+                            Button(
+                                onClick = {
+                                    openPdfLauncher.launch(arrayOf("application/pdf"))
+                                },
+                                enabled = state.puedeOperar && !bloqueaSubidaZ,
+                            ) {
+                                Text("Subir Informe Z")
+                            }
+                            if (state.estadoZ == "ERROR" && !bloqueaSubidaZ) {
+                                TextButton(
+                                    onClick = {
+                                        openPdfLauncher.launch(arrayOf("application/pdf"))
+                                    },
+                                ) {
+                                    Text("Reintentar")
+                                }
+                            }
                         }
 
                         Spacer(Modifier.height(8.dp))
@@ -145,7 +178,7 @@ fun CierreCajaScreen(
                             value = state.monedas,
                             onValueChange = { viewModel.onMonedasChange(it) },
                             label = { Text("Monedas") },
-                            enabled = state.puedeOperar && !state.loading,
+                            enabled = state.puedeOperar && !bloqueaPorCierre,
                             modifier = Modifier.fillMaxWidth(),
                         )
 
@@ -155,7 +188,7 @@ fun CierreCajaScreen(
                             value = state.billetes,
                             onValueChange = { viewModel.onBilletesChange(it) },
                             label = { Text("Billetes") },
-                            enabled = state.puedeOperar && !state.loading,
+                            enabled = state.puedeOperar && !bloqueaPorCierre,
                             modifier = Modifier.fillMaxWidth(),
                         )
 
@@ -214,21 +247,46 @@ fun CierreCajaScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                if (state.loading) {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                if (muestraProgreso) {
+                    if (state.subiendoInformeZ && state.progresoSubidaInformeZ > 0f) {
+                        LinearProgressIndicator(
+                            progress = { state.progresoSubidaInformeZ },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp),
+                        )
+                        Text(
+                            "Subiendo informe Z… ${(state.progresoSubidaInformeZ * 100f).toInt()}%",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    } else {
+                        LinearProgressIndicator(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp),
+                        )
+                        Text(
+                            text = if (state.subiendoInformeZ) {
+                                "Subiendo informe Z…"
+                            } else {
+                                "Cerrando caja…"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
                 }
                 state.cierreError?.let { msg ->
                     Text(
                         text = msg,
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
-                        maxLines = 4,
-                        overflow = TextOverflow.Ellipsis,
+                        maxLines = 6,
+                        overflow = TextOverflow.Visible,
                     )
                 }
                 Button(
                     onClick = { viewModel.guardarCierre() },
-                    enabled = state.canClose,
+                    enabled = state.canClose && !bloqueaSubidaZ,
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Text("CERRAR CAJA")
@@ -236,12 +294,4 @@ fun CierreCajaScreen(
             }
         }
     }
-}
-
-@Composable
-fun CierreCajaScreen(
-    viewModel: CierreCajaViewModel = viewModel(),
-    onSignOut: () -> Unit = {},
-) {
-    CierreCajaScreen(modifier = Modifier, viewModel = viewModel, onSignOut = onSignOut)
 }

@@ -35,7 +35,11 @@ data class CierreState(
     val zPdfPath: String? = null,
     val cierreDocId: String? = null,
 
-    val loading: Boolean = false,
+    /** Cierre oficial (HTTP / callable), no confundir con subida del PDF Z. */
+    val cargandoCierre: Boolean = false,
+    val subiendoInformeZ: Boolean = false,
+    /** 0f..1f mientras sube; 0f si no hay progreso aún. */
+    val progresoSubidaInformeZ: Float = 0f,
     val canClose: Boolean = false,
     val cierreCompletado: Boolean = false,
     val cierreError: String? = null,
