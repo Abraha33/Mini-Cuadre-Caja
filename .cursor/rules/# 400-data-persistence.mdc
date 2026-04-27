@@ -1,0 +1,307 @@
+# 400-data-persistence.mdc
+# Applies to: **/*Dao.kt, **/*Database.kt
+
+You are working on local persistence for Mini Cuadre Caja.
+
+This ERP/POS app requires reliable offline-first storage.
+Local data integrity is critical.
+
+==================================================
+PRIMARY GOAL
+==================================================
+
+Design persistence that is:
+
+- reliable
+- migration-safe
+- traceable
+- sync-friendly
+- performant
+- maintainable
+
+Local storage must support business continuity.
+
+==================================================
+TECH STACK
+==================================================
+
+Primary local stack:
+
+- Room
+- SQLite
+- Coroutines
+- Flow
+- WorkManager integration
+
+==================================================
+ROLE OF LOCAL DATABASE
+==================================================
+
+Local DB is used for:
+
+- offline operations
+- cached reference data
+- pending sync queue
+- temporary UI continuity
+- recovery after app restart
+- audit support
+
+Cloud still remains remote source of truth where applicable.
+
+==================================================
+DATABASE DESIGN RULES
+==================================================
+
+Prefer:
+
+- explicit entities
+- normalized structure when useful
+- indexes for query-heavy columns
+- clear foreign references when practical
+- append-friendly tables for financial events
+
+Avoid chaotic schemas.
+
+==================================================
+SUGGESTED TABLE DOMAINS
+==================================================
+
+Examples:
+
+users_local
+shifts_local
+financial_events_local
+cash_movements_local
+closures_local
+inventory_local
+sync_queue
+sync_metadata
+
+==================================================
+ENTITY RULES
+==================================================
+
+Use clear names.
+
+Examples:
+
+FinancialEventEntity
+CashMovementEntity
+ClosureEntity
+SyncQueueEntity
+
+Include:
+
+- primary key
+- createdAt
+- updatedAt if relevant
+- syncStatus when needed
+
+Prefer immutable data classes.
+
+==================================================
+MONEY / FINANCIAL DATA
+==================================================
+
+Use consistent numeric strategy.
+
+Prefer:
+- Long cents
+or
+- explicit Decimal strategy
+
+Avoid floating-point money errors.
+
+Never silently round.
+
+==================================================
+DAO RULES
+==================================================
+
+DAOs should be focused.
+
+Prefer:
+
+- insert()
+- updateStatus()
+- getById()
+- observeActiveShift()
+- listPendingSync()
+
+Use suspend for writes.
+Use Flow for observable reads.
+
+Avoid giant DAO files.
+
+==================================================
+QUERY RULES
+==================================================
+
+Queries must be:
+
+- indexed where needed
+- predictable
+- minimal columns when possible
+- explicit ordering
+
+Examples:
+ORDER BY createdAt DESC
+
+==================================================
+TRANSACTION RULES
+==================================================
+
+Use @Transaction when:
+
+- multi-table consistency required
+- inserting event + queue item
+- closure snapshot + shift update
+
+Do not split critical related writes casually.
+
+==================================================
+SYNC SUPPORT
+==================================================
+
+Local DB must support sync states.
+
+Examples:
+
+PENDING
+SYNCING
+SYNCED
+FAILED
+RETRY_WAIT
+
+Use explicit columns.
+
+==================================================
+OUTBOX PATTERN
+==================================================
+
+Use sync_queue for remote actions.
+
+Columns example:
+
+id
+eventId
+entityType
+entityId
+action
+payloadJson
+status
+retries
+createdAt
+
+Do not rely on memory-only queues.
+
+==================================================
+MIGRATIONS
+==================================================
+
+Every schema change must consider migration.
+
+Prefer:
+
+- explicit Migration objects
+- preserve user data
+- test migrations
+
+Never use destructive migration in production unless explicitly approved.
+
+==================================================
+OFFLINE RECOVERY
+==================================================
+
+App restart should preserve:
+
+- pending closures
+- pending sync actions
+- active shift state
+- draft forms if applicable
+
+==================================================
+FLOW / OBSERVABILITY
+==================================================
+
+Prefer Flow for:
+
+- active shift
+- pending sync count
+- inventory changes
+- recent movements
+
+UI should react to DB changes safely.
+
+==================================================
+PERFORMANCE RULES
+==================================================
+
+- Index frequently filtered columns
+- Avoid N+1 query patterns
+- Paginate large tables when needed
+- Keep writes efficient
+- Avoid huge blobs in Room
+
+==================================================
+DO NOT STORE IN ROOM
+==================================================
+
+Avoid storing:
+
+- large images
+- PDFs
+- massive logs
+- secrets in plain text
+
+Use file storage when needed.
+
+==================================================
+SECURITY RULES
+==================================================
+
+- Sensitive local data should be minimized
+- Prepare for encrypted DB future
+- Clear session-scoped data on logout if needed
+
+==================================================
+FINANCIAL DOMAIN RULES
+==================================================
+
+- Historical local events should remain traceable
+- Never overwrite closure history casually
+- Use append-first mindset
+- Sync retries must not duplicate money events
+
+==================================================
+ANTI-PATTERNS TO AVOID
+==================================================
+
+- One giant table for everything
+- Float money columns
+- Destructive migrations casually
+- DAO with 50 methods unrelated
+- Memory-only pending queue
+- Hidden side effects in callbacks
+
+==================================================
+WHEN CHANGING SCHEMA
+==================================================
+
+Explain:
+
+1. why change needed
+2. migration path
+3. sync impact
+4. query impact
+
+==================================================
+FINAL PRIORITY ORDER
+==================================================
+
+1. Data integrity
+2. Migration safety
+3. Sync compatibility
+4. Performance
+5. Maintainability
+6. Dev speed

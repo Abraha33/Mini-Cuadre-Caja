@@ -1,0 +1,258 @@
+# 100-mvvm-architecture.mdc
+# Applies to: app/src/main/java/**/*
+
+You are working inside an Android MVVM architecture for Mini Cuadre Caja.
+
+==================================================
+PRIMARY GOAL
+==================================================
+
+Maintain clean separation between:
+- UI
+- State management
+- Domain logic
+- Data access
+- Infrastructure
+
+Avoid coupling features directly to Firebase or UI widgets.
+
+==================================================
+PACKAGE STRUCTURE (PREFERRED)
+==================================================
+
+Use feature-first structure when possible:
+
+feature_auth/
+feature_cash/
+feature_closure/
+feature_inventory/
+feature_expenses/
+feature_dashboard/
+
+Shared layers:
+
+core/
+data/
+domain/
+sync/
+navigation/
+
+Inside features:
+
+feature_x/
+- ui/
+- presentation/
+- domain/ (optional if complex)
+- data/ (optional if isolated)
+
+==================================================
+MVVM RESPONSIBILITIES
+==================================================
+
+UI (Compose Screens / Components):
+- Render state
+- Send user intents
+- No business rules
+- No direct repository logic
+
+ViewModel:
+- Own screen state
+- Coordinate use cases
+- Handle events/actions
+- Expose StateFlow
+- Launch coroutines safely
+
+Use Cases:
+- Encapsulate business actions
+- Reusable across screens
+- Single responsibility
+
+Repositories:
+- Abstract data sources
+- Combine local/remote if needed
+- Hide Firebase/Room implementation details
+
+==================================================
+VIEWMODEL RULES
+==================================================
+
+Prefer:
+
+- One UiState data class per screen
+- One-time events separated from state
+- StateFlow for observable state
+- viewModelScope for async work
+
+Avoid:
+
+- Large ViewModels with many unrelated responsibilities
+- Mutable state exposed publicly
+- Business logic duplicated in ViewModel
+- Direct Android Context unless required
+
+Pattern:
+
+private val _uiState = MutableStateFlow(...)
+val uiState = _uiState.asStateFlow()
+
+==================================================
+UI STATE DESIGN
+==================================================
+
+Prefer explicit state models:
+
+- isLoading
+- data
+- errorMessage
+- isSubmitting
+- hasPendingSync
+
+Use immutable data classes.
+
+Use sealed classes when state is mutually exclusive.
+
+==================================================
+EVENT HANDLING
+==================================================
+
+Prefer intent methods:
+
+onLoginClick()
+onCloseShift()
+onRetrySync()
+onAmountChanged(value)
+
+Avoid generic methods:
+
+submit()
+handle()
+process()
+
+==================================================
+USE CASE RULES
+==================================================
+
+Name clearly:
+
+- CreateClosureUseCase
+- ValidateCashCountUseCase
+- SyncPendingEventsUseCase
+- LoginUserUseCase
+
+Each use case should:
+- Do one thing well
+- Return typed result
+- Be testable
+
+==================================================
+REPOSITORY RULES
+==================================================
+
+Interfaces in domain/common layer.
+Implementations in data layer.
+
+Example:
+
+CashRepository
+CashRepositoryImpl
+
+Repositories may use:
+- Room DAO
+- Firestore source
+- Cloud Functions API
+- Sync queue
+
+Avoid exposing DTOs upward.
+
+==================================================
+MAPPING RULES
+==================================================
+
+Use mappers between layers:
+
+DTO -> Entity -> Domain -> UiModel
+
+Avoid leaking backend schemas into UI.
+
+==================================================
+COROUTINES
+==================================================
+
+Use:
+- suspend functions
+- Flow where streaming is useful
+- dispatcher injection if architecture supports it
+
+Avoid:
+- GlobalScope
+- nested launches without reason
+- blocking calls
+
+==================================================
+ERROR HANDLING
+==================================================
+
+Convert raw exceptions into meaningful results.
+
+Prefer:
+
+sealed class AppResult
+- Success
+- ValidationError
+- NetworkError
+- UnknownError
+
+UI should receive user-meaningful states.
+
+==================================================
+DEPENDENCY INJECTION
+==================================================
+
+If Hilt exists:
+- inject repositories
+- inject use cases
+- inject dispatchers where useful
+
+Do not manually instantiate dependencies in ViewModels.
+
+==================================================
+FEATURE BOUNDARIES
+==================================================
+
+Cash closure module should not directly depend on inventory UI module.
+
+Use shared domain contracts instead.
+
+==================================================
+ANTI-PATTERNS TO AVOID
+==================================================
+
+- Screen calling Firestore directly
+- ViewModel with 1000+ lines
+- Repository returning Compose state
+- Use case depending on UI classes
+- Circular dependencies
+- Copy-paste logic across features
+
+==================================================
+WHEN ADDING NEW FEATURE
+==================================================
+
+Prefer:
+
+1. Define UiState
+2. Define user intents
+3. Create/extend use case
+4. Wire repository
+5. Build screen
+6. Add tests
+
+==================================================
+FINAL PRIORITIES
+==================================================
+
+1. Separation of concerns
+2. Testability
+3. Readability
+4. Reuse
+5. Delivery speed

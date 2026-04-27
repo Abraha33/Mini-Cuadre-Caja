@@ -1,0 +1,335 @@
+# 500-financial-logic.mdc
+# Applies to: **/domain/model/**/*, **/usecase/**/*
+
+You are working on financial and operational business logic for Mini Cuadre Caja.
+
+This is an ERP/POS system.
+Money correctness is mission critical.
+
+==================================================
+PRIMARY GOAL
+==================================================
+
+Protect:
+
+- money integrity
+- closure accuracy
+- traceability
+- reproducibility
+- auditability
+
+Never optimize speed over financial correctness.
+
+==================================================
+DOMAIN PRINCIPLES
+==================================================
+
+Separate clearly:
+
+1. Financial events (business reality)
+2. Cash movements (physical cash drawer)
+3. Closure snapshots (end-of-shift state)
+4. Derived reports (exports / dashboards)
+
+These are not the same concept.
+
+==================================================
+CORE CONCEPTS
+==================================================
+
+Financial Event examples:
+
+- SALE
+- EXPENSE
+- PAYROLL
+- SUPPLIER_PAYMENT
+- REFUND
+- ADJUSTMENT (strictly controlled)
+
+Cash Movement examples:
+
+- CASH_IN
+- CASH_OUT
+
+Closure:
+
+- expected cash
+- counted cash
+- difference
+- transfers summary
+- totals snapshot
+
+==================================================
+NON-NEGOTIABLE RULES
+==================================================
+
+- Historical records must not be casually mutated.
+- Every monetary movement must be traceable.
+- Closures must be reproducible later.
+- Corrections should create compensating events, not hidden edits.
+- Numbers must reconcile.
+
+==================================================
+MONEY REPRESENTATION
+==================================================
+
+Use precise monetary storage.
+
+Prefer:
+- Long cents
+or approved decimal strategy
+
+Avoid Float / Double for currency.
+
+Always be explicit with rounding.
+
+==================================================
+SALE RULES
+==================================================
+
+A sale should capture:
+
+- amount
+- payment method
+- timestamp
+- operator
+- shiftId
+- reference if needed
+
+If cash sale:
+- may generate cash movement
+
+If transfer/digital:
+- does not automatically mean physical cash
+
+==================================================
+EXPENSE RULES
+==================================================
+
+Expense should capture:
+
+- amount
+- category
+- method
+- operator
+- evidence if available
+
+If paid in cash:
+- cash out movement
+
+==================================================
+REFUND RULES
+==================================================
+
+Refunds must reference original transaction when possible.
+
+Never create anonymous refunds casually.
+
+Refund should be visible in reporting.
+
+==================================================
+SHIFT / SESSION RULES
+==================================================
+
+Prefer one active shift per cashier/cashbox context.
+
+No duplicate active sessions.
+
+All operational events should link to shift when applicable.
+
+==================================================
+CLOSURE RULES
+==================================================
+
+Closure is a snapshot, not a mutable draft.
+
+Should contain:
+
+- expected cash
+- counted cash
+- difference
+- transfer totals
+- event summaries
+- timestamps
+- operator
+
+After finalization:
+- closure should become immutable except controlled annotations.
+
+==================================================
+EXPECTED CASH LOGIC
+==================================================
+
+Expected cash usually derives from:
+
+opening base
++ cash sales
++ cash income
+- cash expenses
+- refunds paid in cash
+± approved adjustments
+
+Do not mix transfers into drawer cash.
+
+==================================================
+DIFFERENCE RULES
+==================================================
+
+Difference = counted cash - expected cash
+
+Must be explicit.
+
+Possible states:
+
+- EXACT
+- SHORTAGE
+- OVERAGE
+- WARNING_THRESHOLD
+- CRITICAL_THRESHOLD
+
+Thresholds should be configurable.
+
+==================================================
+TRANSFER / DIGITAL PAYMENT RULES
+==================================================
+
+Transfers are business revenue,
+but not necessarily physical drawer cash.
+
+Track separately:
+
+- Nequi
+- Bancolombia
+- Card
+- Other digital
+
+==================================================
+ADJUSTMENT RULES
+==================================================
+
+Adjustments are dangerous.
+
+Require:
+
+- reason
+- user
+- timestamp
+- approval if high impact
+
+Never silent adjustments.
+
+==================================================
+AUDIT TRAIL
+==================================================
+
+Every critical action should preserve:
+
+- who
+- when
+- what changed
+- why
+- related amounts
+- device/source if available
+
+==================================================
+REVERSALS / CORRECTIONS
+==================================================
+
+Prefer reversal events:
+
+Wrong sale:
+- create reversal/refund event
+
+Wrong expense:
+- create compensating event
+
+Avoid deleting history.
+
+==================================================
+REPORTING RULES
+==================================================
+
+Reports must distinguish:
+
+- gross sales
+- refunds
+- net sales
+- cash in drawer
+- transfers
+- expenses
+- closure difference
+
+Do not merge unrelated values.
+
+==================================================
+SYNC SAFETY
+==================================================
+
+Retries must not duplicate financial events.
+
+Use:
+
+- eventId
+- idempotency keys
+- duplicate checks
+
+==================================================
+VALIDATION RULES
+==================================================
+
+Reject:
+
+- negative invalid values
+- impossible state transitions
+- duplicate closures
+- closure without active shift
+- refund > original amount (unless approved flow)
+
+==================================================
+ANTI-FRAUD MINDSET
+==================================================
+
+Assume some users may make mistakes or abuse flows.
+
+Design controls:
+
+- confirmations
+- permissions
+- logs
+- anomaly flags
+
+==================================================
+ANTI-PATTERNS TO AVOID
+==================================================
+
+- Editing historical totals directly
+- Mixing transfers with drawer cash
+- Hidden discounts affecting totals silently
+- Float money math
+- Closure recalculated unpredictably later
+- Delete-and-recreate accounting history
+
+==================================================
+WHEN ASKED TO CHANGE MONEY LOGIC
+==================================================
+
+Always evaluate:
+
+1. financial risk
+2. audit impact
+3. migration impact
+4. reporting impact
+5. fraud risk
+
+Warn if risky.
+
+==================================================
+FINAL PRIORITY ORDER
+==================================================
+
+1. Correctness
+2. Traceability
+3. Auditability
+4. Fraud resistance
+5. Maintainability
+6. Speed
