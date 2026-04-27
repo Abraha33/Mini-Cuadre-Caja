@@ -11,6 +11,7 @@ import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.storage.FirebaseStorage
+import com.google.firebase.storage.StorageException
 import envaxsantander.abrahamcaceres.cuadre_caja_app.domain.Result
 import envaxsantander.abrahamcaceres.cuadre_caja_app.domain.toUserMessage
 import kotlinx.coroutines.Job
@@ -32,32 +33,39 @@ class CierreCajaViewModel(
 
     private var turnoJob: Job? = null
 
-    init {
+    private val authStateListener = FirebaseAuth.AuthStateListener {
         refreshAuthAndStart()
+    }
+
+    init {
+        auth.addAuthStateListener(authStateListener)
+        refreshAuthAndStart()
+    }
+
+    override fun onCleared() {
+        auth.removeAuthStateListener(authStateListener)
+        super.onCleared()
     }
 
     private fun refreshAuthAndStart() {
         val uid = auth.currentUser?.uid
-        _state.update { it.copy(usuarioId = uid) }
         Log.d(tag, "auth: currentUser uid=${uid ?: "null"}")
 
         turnoJob?.cancel()
         turnoJob = null
 
         if (uid.isNullOrBlank()) {
-            _state.update {
-                it.copy(
-                    cierreError = "No autenticado: inicia sesión para continuar.",
-                    puedeOperar = false,
-                    turnoBloqueoMsg = "Sin sesión",
-                    turnoId = null,
-                    turnoEstado = null,
-                    rol = null,
-                )
-            }
+            val cajaId = _state.value.cajaId
+            _state.value = CierreState(cajaId = cajaId).copy(
+                cierreError = "No autenticado: inicia sesión para continuar.",
+                puedeOperar = false,
+                turnoBloqueoMsg = "Sin sesión",
+            )
             recalcular()
             return
         }
+
+        _state.update { it.copy(usuarioId = uid, cierreError = null) }
 
         viewModelScope.launch {
             cargarRol(uid)
@@ -240,11 +248,18 @@ class CierreCajaViewModel(
                 recalcular()
             } catch (t: Throwable) {
                 Log.e(tag, "uploadPdf: failed", t)
+                val msg = when (t) {
+                    is StorageException ->
+                        "No se pudo subir el PDF (${t.errorCode}). Revisa conexión, espacio y permisos."
+                    else ->
+                        (t.message?.takeIf { it.isNotBlank() })
+                            ?: "Error al subir el informe Z. Vuelve a intentarlo."
+                }
                 _state.update {
                     it.copy(
                         estadoZ = "ERROR",
                         loading = false,
-                        cierreError = (t.message ?: t.javaClass.simpleName),
+                        cierreError = msg,
                     )
                 }
                 recalcular()
@@ -257,7 +272,8 @@ class CierreCajaViewModel(
         cierreJob = viewModelScope.launch {
             repo.observeCierre(cierreId).collectLatest { data ->
                 val z = data?.get("z") as? Map<*, *>
-                val validacion = z?.get("validacion") as? String
+                val validacion = (z?.get("validacion") as? String)?.trim()?.takeIf { it.isNotEmpty() }
+                val zError = (z?.get("error") as? String)?.trim()?.takeIf { it.isNotEmpty() }
                 val resumen = (z?.get("resumen") as? Map<*, *>) ?: emptyMap<Any?, Any?>()
 
                 val zResumen = ZResumen(
@@ -268,15 +284,32 @@ class CierreCajaViewModel(
                     nivel = resumen["nivel"] as? String,
                 )
 
-                if (!validacion.isNullOrBlank()) {
-                    _state.update {
-                        it.copy(
-                            estadoZ = validacion,
-                            zResumen = zResumen,
-                        )
-                    }
-                    recalcular()
+                val hasServerZSignal =
+                    !validacion.isNullOrBlank() || !zError.isNullOrBlank()
+                if (!hasServerZSignal) return@collectLatest
+
+                val nuevoEstadoZ = when {
+                    !validacion.isNullOrBlank() -> validacion
+                    zError != null -> "ERROR"
+                    else -> _state.value.estadoZ
                 }
+
+                val mensajeZ = when {
+                    !zError.isNullOrBlank() -> zError
+                    nuevoEstadoZ == "ERROR" ->
+                        "No se pudo validar el informe Z. Revisa el PDF e inténtalo de nuevo."
+                    nuevoEstadoZ == "VALIDADO" || nuevoEstadoZ == "WARNING" -> null
+                    else -> _state.value.cierreError
+                }
+
+                _state.update {
+                    it.copy(
+                        estadoZ = nuevoEstadoZ,
+                        zResumen = zResumen,
+                        cierreError = mensajeZ,
+                    )
+                }
+                recalcular()
             }
         }
     }
@@ -338,53 +371,6 @@ class CierreCajaViewModel(
             }
 
             try {
-                val payload = hashMapOf(
-                    "turnoId" to turnoId,
-                    "cajaId" to s.cajaId,
-                    "cierreDocId" to cierreDocId,
-                    "conteo" to mapOf(
-                        "monedas" to (s.monedas.toDoubleOrNull() ?: 0.0),
-                        "billetes" to (s.billetes.toDoubleOrNull() ?: 0.0),
-                    ),
-                )
-
-                val result = functionsUsEast1
-                    .getHttpsCallable("crearCierre")
-                    .call(payload)
-                    .await()
-                    .getData() as? Map<*, *>
-
-                val diferenciaSrv = (result?.get("diferencia") as? Number)?.toDouble() ?: s.diferencia
-                val nivelSrv = result?.get("nivel") as? String ?: s.nivel
-                val resumenMap = result?.get("resumen") as? Map<*, *>
-                val ingSrv = (resumenMap?.get("ingresos_efectivo") as? Number)?.toDouble()
-                val egrSrv = (resumenMap?.get("egresos_efectivo") as? Number)?.toDouble()
-                val saldoSrv = (resumenMap?.get("saldo_esperado") as? Number)?.toDouble()
-                val transSrv = (resumenMap?.get("transferencias") as? Number)?.toDouble()
-
-                _state.update {
-                    it.copy(
-                        loading = false,
-                        cierreCompletado = true,
-                        canClose = false,
-                        puedeOperar = false,
-                        turnoEstado = "CERRADO",
-                        turnoBloqueoMsg = "Caja cerrada (turno cerrado).",
-                        diferencia = diferenciaSrv,
-                        nivel = nivelSrv,
-                        ingresos = ingSrv ?: it.ingresos,
-                        egresos = egrSrv ?: it.egresos,
-                        saldoEsperado = saldoSrv ?: it.saldoEsperado,
-                        transferencias = transSrv ?: it.transferencias,
-                    )
-                }
-                recalcular()
-            } catch (t: FirebaseFunctionsException) {
-                Log.e(tag, "guardarCierre: functions", t)
-                _state.update {
-                    it.copy(
-                        loading = false,
-                        cierreError = "${t.code}: ${t.message ?: t.details}",
                 val monedas = s.monedas.toDoubleOrNull() ?: 0.0
                 val billetes = s.billetes.toDoubleOrNull() ?: 0.0
 

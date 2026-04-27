@@ -24,16 +24,6 @@ class CierreRemoteDataSource(
     private val functionsUsEast1: FirebaseFunctions = FirebaseFunctions.getInstance("us-east1"),
 ) {
     suspend fun crearCierre(
-        turnoId: String, cajaId: String, cierreDocId: String, monedas: Double, billetes: Double
-    ): Result<CrearCierreResponse> {
-        return try {
-            val payload = hashMapOf(
-                "turnoId" to turnoId, "cajaId" to cajaId, "cierreDocId" to cierreDocId,
-                "conteo" to mapOf("monedas" to monedas, "billetes" to billetes)
-            )
-            val raw = functionsUsEast1.getHttpsCallable("crearCierre").call(payload).await().getData() as? Map<*, *> ?: emptyMap<Any?, Any?>()
-            val ok = raw["ok"] as? Boolean
-            if (ok == false) return Result.Err(AppError.ServerError("El servidor rechazó el cierre."))
         turnoId: String,
         cajaId: String,
         cierreDocId: String,
@@ -55,7 +45,7 @@ class CierreRemoteDataSource(
                 .getHttpsCallable("crearCierre")
                 .call(payload)
                 .await()
-                .data as? Map<*, *>
+                .getData() as? Map<*, *>
                 ?: emptyMap<Any?, Any?>()
 
             val ok = raw["ok"] as? Boolean
@@ -69,17 +59,6 @@ class CierreRemoteDataSource(
                     ingresosEfectivo = (it["ingresos_efectivo"] as? Number)?.toDouble(),
                     egresosEfectivo = (it["egresos_efectivo"] as? Number)?.toDouble(),
                     saldoEsperado = (it["saldo_esperado"] as? Number)?.toDouble(),
-                    transferencias = (it["transferencias"] as? Number)?.toDouble()
-                )
-            }
-            val diferencia = (raw["diferencia"] as? Number)?.toDouble() ?: return Result.Err(AppError.ServerError("Error diferencia"))
-            val nivel = raw["nivel"] as? String ?: return Result.Err(AppError.ServerError("Error nivel"))
-
-            Result.Ok(CrearCierreResponse(raw["cierreId"] as? String ?: cierreDocId, diferencia, nivel, resumen))
-        } catch (t: FirebaseFunctionsException) {
-            Result.Err(mapFunctionsError(t))
-        } catch (t: Throwable) {
-            Result.Err(AppError.Unknown(t.message ?: "Unknown"))
                     transferencias = (it["transferencias"] as? Number)?.toDouble(),
                 )
             }
@@ -96,7 +75,7 @@ class CierreRemoteDataSource(
                     diferencia = diferencia,
                     nivel = nivel,
                     resumen = resumen,
-                )
+                ),
             )
         } catch (t: FirebaseFunctionsException) {
             Result.Err(mapFunctionsError(t))
@@ -107,7 +86,6 @@ class CierreRemoteDataSource(
 
     suspend fun exportarCierre(cierreId: String): Result<Unit> {
         return try {
-            functionsUsEast1.getHttpsCallable("exportarCierre").call(hashMapOf("cierreId" to cierreId)).await()
             functionsUsEast1
                 .getHttpsCallable("exportarCierre")
                 .call(hashMapOf("cierreId" to cierreId))
@@ -116,7 +94,6 @@ class CierreRemoteDataSource(
         } catch (t: FirebaseFunctionsException) {
             Result.Err(mapFunctionsError(t))
         } catch (t: Throwable) {
-            Result.Err(AppError.Unknown(t.message ?: "Unknown"))
             Result.Err(AppError.Unknown(t.message ?: t.javaClass.simpleName))
         }
     }
@@ -126,12 +103,6 @@ class CierreRemoteDataSource(
             FirebaseFunctionsException.Code.UNAVAILABLE -> AppError.NetworkError
             FirebaseFunctionsException.Code.UNAUTHENTICATED -> AppError.Unauthenticated
             FirebaseFunctionsException.Code.PERMISSION_DENIED -> AppError.InsufficientPermissions
-            FirebaseFunctionsException.Code.INVALID_ARGUMENT, FirebaseFunctionsException.Code.FAILED_PRECONDITION -> AppError.ValidationError(t.message ?: "Error")
-            FirebaseFunctionsException.Code.INTERNAL -> AppError.ServerError(t.message ?: "Error")
-            else -> AppError.Unknown("Error")
-        }
-    }
-}
             FirebaseFunctionsException.Code.INVALID_ARGUMENT,
             FirebaseFunctionsException.Code.FAILED_PRECONDITION,
             -> AppError.ValidationError(t.message ?: "No se pudo completar la operación.")
@@ -140,4 +111,3 @@ class CierreRemoteDataSource(
         }
     }
 }
-
