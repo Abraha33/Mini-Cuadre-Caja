@@ -11,6 +11,7 @@ import kotlinx.coroutines.tasks.await
 
 class CierreRepository(
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance(),
+    private val remote: CierreRemoteDataSource = CierreRemoteDataSource(),
 ) {
     fun observeCierre(cierreId: String): Flow<Map<String, Any?>?> = callbackFlow {
         val ref = db.collection("cierres_caja").document(cierreId)
@@ -125,4 +126,20 @@ class CierreRepository(
         // Importante: Libera el listener cuando el Flow ya no se use
         awaitClose { listener.remove() }
     }
+
+    suspend fun crearCierreOficial(
+        turnoId: String,
+        cajaId: String,
+        cierreDocId: String,
+        monedas: Double,
+        billetes: Double,
+    ) = remote.crearCierre(
+        turnoId = turnoId,
+        cajaId = cajaId,
+        cierreDocId = cierreDocId,
+        monedas = monedas,
+        billetes = billetes,
+    )
+
+    suspend fun exportarCierreOficial(cierreId: String) = remote.exportarCierre(cierreId)
 }

@@ -34,6 +34,34 @@ class CierreRemoteDataSource(
             val raw = functionsUsEast1.getHttpsCallable("crearCierre").call(payload).await().getData() as? Map<*, *> ?: emptyMap<Any?, Any?>()
             val ok = raw["ok"] as? Boolean
             if (ok == false) return Result.Err(AppError.ServerError("El servidor rechazó el cierre."))
+        turnoId: String,
+        cajaId: String,
+        cierreDocId: String,
+        monedas: Double,
+        billetes: Double,
+    ): Result<CrearCierreResponse> {
+        return try {
+            val payload = hashMapOf(
+                "turnoId" to turnoId,
+                "cajaId" to cajaId,
+                "cierreDocId" to cierreDocId,
+                "conteo" to mapOf(
+                    "monedas" to monedas,
+                    "billetes" to billetes,
+                ),
+            )
+
+            val raw = functionsUsEast1
+                .getHttpsCallable("crearCierre")
+                .call(payload)
+                .await()
+                .data as? Map<*, *>
+                ?: emptyMap<Any?, Any?>()
+
+            val ok = raw["ok"] as? Boolean
+            if (ok == false) {
+                return Result.Err(AppError.ServerError("El servidor rechazó el cierre."))
+            }
 
             val resumenMap = raw["resumen"] as? Map<*, *>
             val resumen = resumenMap?.let {
@@ -52,17 +80,44 @@ class CierreRemoteDataSource(
             Result.Err(mapFunctionsError(t))
         } catch (t: Throwable) {
             Result.Err(AppError.Unknown(t.message ?: "Unknown"))
+                    transferencias = (it["transferencias"] as? Number)?.toDouble(),
+                )
+            }
+
+            val cierreId = raw["cierreId"] as? String ?: cierreDocId
+            val diferencia = (raw["diferencia"] as? Number)?.toDouble()
+                ?: return Result.Err(AppError.ServerError("Respuesta incompleta (diferencia)."))
+            val nivel = raw["nivel"] as? String
+                ?: return Result.Err(AppError.ServerError("Respuesta incompleta (nivel)."))
+
+            Result.Ok(
+                CrearCierreResponse(
+                    cierreId = cierreId,
+                    diferencia = diferencia,
+                    nivel = nivel,
+                    resumen = resumen,
+                )
+            )
+        } catch (t: FirebaseFunctionsException) {
+            Result.Err(mapFunctionsError(t))
+        } catch (t: Throwable) {
+            Result.Err(AppError.Unknown(t.message ?: t.javaClass.simpleName))
         }
     }
 
     suspend fun exportarCierre(cierreId: String): Result<Unit> {
         return try {
             functionsUsEast1.getHttpsCallable("exportarCierre").call(hashMapOf("cierreId" to cierreId)).await()
+            functionsUsEast1
+                .getHttpsCallable("exportarCierre")
+                .call(hashMapOf("cierreId" to cierreId))
+                .await()
             Result.Ok(Unit)
         } catch (t: FirebaseFunctionsException) {
             Result.Err(mapFunctionsError(t))
         } catch (t: Throwable) {
             Result.Err(AppError.Unknown(t.message ?: "Unknown"))
+            Result.Err(AppError.Unknown(t.message ?: t.javaClass.simpleName))
         }
     }
 
@@ -77,3 +132,12 @@ class CierreRemoteDataSource(
         }
     }
 }
+            FirebaseFunctionsException.Code.INVALID_ARGUMENT,
+            FirebaseFunctionsException.Code.FAILED_PRECONDITION,
+            -> AppError.ValidationError(t.message ?: "No se pudo completar la operación.")
+            FirebaseFunctionsException.Code.INTERNAL -> AppError.ServerError(t.message ?: "Error interno.")
+            else -> AppError.Unknown("${t.code}: ${t.message ?: (t.details?.toString() ?: "error")}")
+        }
+    }
+}
+

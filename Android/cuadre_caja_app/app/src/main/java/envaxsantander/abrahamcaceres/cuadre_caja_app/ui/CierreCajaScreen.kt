@@ -154,13 +154,15 @@ fun CierreCajaScreen(
 
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp)) {
-                    Text("Diferencia: ${state.diferencia}")
-                    Text("Nivel: ${state.nivel}")
-                    if (state.nivel == "CRITICAL" && state.rol != "admin") {
+                    val diff = state.diferenciaOficial
+                    val lvl = state.nivelOficial
+                    Text("Diferencia (oficial): ${diff ?: "-"}")
+                    Text("Nivel (oficial): ${lvl ?: "-"}")
+                    if (!state.cierreCompletado) {
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "CRITICAL: solo admin puede cerrar.",
-                            color = MaterialTheme.colorScheme.error,
+                            "Nota: el nivel y la diferencia oficiales solo se determinan al cerrar (servidor).",
+                            style = MaterialTheme.typography.bodySmall,
                         )
                     }
                 }

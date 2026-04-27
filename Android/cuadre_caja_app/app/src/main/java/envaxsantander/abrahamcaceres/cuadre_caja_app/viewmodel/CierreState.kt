@@ -24,8 +24,10 @@ data class CierreState(
     val billetes: String = "",
     val totalContado: Double = 0.0,
 
-    val diferencia: Double = 0.0,
-    val nivel: String = "LOW",
+    /** Resultado oficial (servidor). No calcular en cliente. */
+    val diferenciaOficial: Double? = null,
+    /** Resultado oficial (servidor). No calcular en cliente. */
+    val nivelOficial: String? = null,
 
     val estadoZ: String = "PENDIENTE",
     val zResumen: ZResumen? = null,

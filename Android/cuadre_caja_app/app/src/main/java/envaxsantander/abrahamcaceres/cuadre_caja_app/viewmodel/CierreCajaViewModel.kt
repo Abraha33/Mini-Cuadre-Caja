@@ -7,12 +7,12 @@ import androidx.lifecycle.viewModelScope
 import envaxsantander.abrahamcaceres.cuadre_caja_app.data.CierreRepository
 import envaxsantander.abrahamcaceres.cuadre_caja_app.data.MovimientoCaja
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.functions.FirebaseFunctions
-import com.google.firebase.functions.FirebaseFunctionsException
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.storage.FirebaseStorage
+import envaxsantander.abrahamcaceres.cuadre_caja_app.domain.Result
+import envaxsantander.abrahamcaceres.cuadre_caja_app.domain.toUserMessage
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -20,7 +20,6 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import kotlin.math.abs
 
 class CierreCajaViewModel(
     private val repo: CierreRepository = CierreRepository(),
@@ -30,11 +29,6 @@ class CierreCajaViewModel(
 
     private val _state = MutableStateFlow(CierreState())
     val state = _state.asStateFlow()
-
-    /** Misma región que Cloud Functions (`crearCierre`, `exportarCierre`). */
-    private val functionsUsEast1: FirebaseFunctions by lazy {
-        FirebaseFunctions.getInstance("us-east1")
-    }
 
     private var turnoJob: Job? = null
 
@@ -176,16 +170,6 @@ class CierreCajaViewModel(
         val total = (s.monedas.toDoubleOrNull() ?: 0.0) +
             (s.billetes.toDoubleOrNull() ?: 0.0)
 
-        val diferencia = total - s.saldoEsperado
-
-        val nivel = when {
-            abs(diferencia) <= 5000 -> "LOW"
-            abs(diferencia) <= 20000 -> "MEDIUM"
-            else -> "CRITICAL"
-        }
-
-        val requiereAdmin = nivel == "CRITICAL" && s.rol != "admin"
-
         _state.update {
             val zOk = it.estadoZ == "VALIDADO" || it.estadoZ == "WARNING"
             val puedeCerrarBase =
@@ -195,12 +179,12 @@ class CierreCajaViewModel(
                     it.puedeOperar
 
             val rolOk = it.rol == "admin" || it.rol == "cajero"
-            val puedeCerrar = puedeCerrarBase && rolOk && !requiereAdmin
+            // “Cliente tonto”: no decidir CRITICAL/WARNING aquí.
+            // Si backend requiere admin, responderá PERMISSION_DENIED.
+            val puedeCerrar = puedeCerrarBase && rolOk && !it.loading && !it.cierreCompletado
 
             it.copy(
                 totalContado = total,
-                diferencia = diferencia,
-                nivel = nivel,
                 canClose = puedeCerrar,
             )
         }
@@ -343,11 +327,6 @@ class CierreCajaViewModel(
                 return@launch
             }
 
-            if (s.nivel == "CRITICAL" && s.rol != "admin") {
-                _state.update { it.copy(cierreError = "Diferencia CRITICAL: requiere admin para cerrar.") }
-                return@launch
-            }
-
             _state.update { it.copy(loading = true, cierreError = null) }
 
             val cierreDocId = s.cierreDocId
@@ -406,7 +385,47 @@ class CierreCajaViewModel(
                     it.copy(
                         loading = false,
                         cierreError = "${t.code}: ${t.message ?: t.details}",
+                val monedas = s.monedas.toDoubleOrNull() ?: 0.0
+                val billetes = s.billetes.toDoubleOrNull() ?: 0.0
+
+                when (
+                    val res = repo.crearCierreOficial(
+                        turnoId = turnoId,
+                        cajaId = s.cajaId,
+                        cierreDocId = cierreDocId,
+                        monedas = monedas,
+                        billetes = billetes,
                     )
+                ) {
+                    is Result.Ok -> {
+                        val r = res.data
+                        _state.update {
+                            it.copy(
+                                loading = false,
+                                cierreCompletado = true,
+                                canClose = false,
+                                puedeOperar = false,
+                                turnoEstado = "CERRADO",
+                                turnoBloqueoMsg = "Caja cerrada (turno cerrado).",
+                                diferenciaOficial = r.diferencia,
+                                nivelOficial = r.nivel,
+                                ingresos = r.resumen?.ingresosEfectivo ?: it.ingresos,
+                                egresos = r.resumen?.egresosEfectivo ?: it.egresos,
+                                saldoEsperado = r.resumen?.saldoEsperado ?: it.saldoEsperado,
+                                transferencias = r.resumen?.transferencias ?: it.transferencias,
+                            )
+                        }
+                        recalcular()
+                    }
+                    is Result.Err -> {
+                        _state.update {
+                            it.copy(
+                                loading = false,
+                                cierreError = res.error.toUserMessage(),
+                            )
+                        }
+                        recalcular()
+                    }
                 }
             } catch (t: Throwable) {
                 Log.e(tag, "guardarCierre: failed", t)
@@ -416,6 +435,7 @@ class CierreCajaViewModel(
                         cierreError = t.message ?: t.javaClass.simpleName,
                     )
                 }
+                recalcular()
             }
         }
     }
@@ -436,21 +456,21 @@ class CierreCajaViewModel(
                 it.copy(exportSheetsLoading = true, exportSheetsError = null, exportSheetsOk = false)
             }
             try {
-                functionsUsEast1
-                    .getHttpsCallable("exportarCierre")
-                    .call(hashMapOf("cierreId" to cid))
-                    .await()
-                Log.d(tag, "exportarCierre: ok")
-                _state.update {
-                    it.copy(exportSheetsLoading = false, exportSheetsOk = true, exportSheetsError = null)
-                }
-            } catch (t: FirebaseFunctionsException) {
-                Log.e(tag, "exportarCierre: functions", t)
-                _state.update {
-                    it.copy(
-                        exportSheetsLoading = false,
-                        exportSheetsError = "${t.code}: ${t.message ?: t.details}",
-                    )
+                when (val res = repo.exportarCierreOficial(cid)) {
+                    is Result.Ok -> {
+                        Log.d(tag, "exportarCierre: ok")
+                        _state.update {
+                            it.copy(exportSheetsLoading = false, exportSheetsOk = true, exportSheetsError = null)
+                        }
+                    }
+                    is Result.Err -> {
+                        _state.update {
+                            it.copy(
+                                exportSheetsLoading = false,
+                                exportSheetsError = res.error.toUserMessage(),
+                            )
+                        }
+                    }
                 }
             } catch (t: Throwable) {
                 Log.e(tag, "exportarCierre: failed", t)
