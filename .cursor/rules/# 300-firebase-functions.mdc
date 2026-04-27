@@ -1,0 +1,318 @@
+# 300-firebase-functions.mdc
+# Applies to: firestore.rules, functions/src/**/*
+
+You are working with Firebase backend systems for Mini Cuadre Caja.
+
+This is a financial / operational ERP app.
+Backend integrity is critical.
+
+==================================================
+PRIMARY GOAL
+==================================================
+
+Build backend logic that is:
+
+- secure
+- deterministic
+- auditable
+- idempotent
+- maintainable
+- resistant to hostile clients
+
+Never assume client honesty.
+
+==================================================
+SYSTEM ROLE
+==================================================
+
+Firebase components used:
+
+- Firebase Auth
+- Firestore
+- Cloud Functions
+- Firebase Storage
+- Security Rules
+
+Responsibilities:
+
+Firestore:
+- operational data
+- state
+- history
+- logs
+
+Functions:
+- critical logic
+- validations
+- closures
+- exports
+- derived processing
+
+Rules:
+- access control
+- write restrictions
+- ownership checks
+
+==================================================
+SOURCE OF TRUTH
+==================================================
+
+Cloud truth:
+- Firestore documents
+
+Client truth:
+- temporary UI state only
+
+Do not trust:
+- totals from UI
+- closure calculations from app
+- role claims from client payloads
+
+==================================================
+CLOUD FUNCTIONS RULES
+==================================================
+
+Use Functions for:
+
+- cash closure generation
+- financial validations
+- role-sensitive operations
+- sync finalization
+- exports to Sheets
+- PDF/report generation
+- duplicate prevention
+- scheduled jobs
+
+Avoid putting critical calculations in app.
+
+==================================================
+FUNCTION DESIGN
+==================================================
+
+Prefer:
+
+- small focused functions
+- clear inputs
+- typed validation
+- explicit outputs
+- reusable internal services
+
+Name clearly:
+
+- createClosure
+- validateShiftState
+- exportDailyReport
+- syncPendingEvents
+
+==================================================
+INPUT VALIDATION
+==================================================
+
+Always validate:
+
+- auth exists
+- required fields present
+- numeric ranges
+- allowed enums
+- document ownership
+- current business state
+
+Reject malformed input early.
+
+==================================================
+AUTHORIZATION
+==================================================
+
+Use authenticated UID from context.
+
+Do not trust UID sent in payload.
+
+Role checks must use trusted server data:
+users/{uid}
+
+Examples:
+- only admin can override critical mismatch
+- only active cashier can close own shift
+
+==================================================
+IDEMPOTENCY
+==================================================
+
+Critical financial operations must tolerate retries.
+
+Use:
+- requestId
+- eventId
+- processedEvents collection if needed
+
+Prevent duplicate:
+- sale posting
+- closure creation
+- exports
+
+==================================================
+FINANCIAL RULES
+==================================================
+
+- Historical records should not be mutated casually.
+- Closures must be reproducible.
+- Cash movement != accounting movement.
+- Differences must be explicit.
+- Rounding rules must be consistent.
+
+==================================================
+FIRESTORE WRITES
+==================================================
+
+Prefer:
+
+- batched writes when atomic group needed
+- transactions when reading then writing dependent state
+- serverTimestamp() for server events
+
+Avoid many scattered writes for one operation.
+
+==================================================
+TRANSACTION CASES
+==================================================
+
+Use transaction when:
+
+- ensuring one active shift
+- close shift once only
+- increment counters safely
+- validating state before commit
+
+==================================================
+DATA MODEL DISCIPLINE
+==================================================
+
+Use explicit collections.
+
+Examples:
+
+users/
+shifts/
+cash_movements/
+financial_events/
+closures/
+logs/
+sync_events/
+
+Avoid random nested structures without reason.
+
+==================================================
+LOGGING / AUDIT
+==================================================
+
+Critical actions should log:
+
+- uid
+- role
+- timestamp
+- action
+- entityId
+- result
+- relevant numbers
+
+Do not log secrets.
+
+==================================================
+ERROR HANDLING
+==================================================
+
+Return meaningful errors:
+
+- unauthenticated
+- permission-denied
+- failed-precondition
+- invalid-argument
+- already-exists
+- internal
+
+Do not expose internal stack traces to client.
+
+==================================================
+SECURITY RULES (FIRESTORE)
+==================================================
+
+Rules should enforce:
+
+- auth required
+- least privilege
+- role-based access
+- immutable finalized closures if needed
+- user-specific reads where required
+
+Rules are not optional.
+
+==================================================
+STORAGE RULES
+==================================================
+
+Protect files by path ownership / role.
+
+Examples:
+
+closures/*
+expenses/*
+users/{uid}/*
+
+No public sensitive files by default.
+
+==================================================
+EXPORTS / INTEGRATIONS
+==================================================
+
+When exporting to Sheets or email:
+
+- never block core closure permanently
+- use retry-safe flows
+- log success/failure
+- separate external failures from core business success
+
+==================================================
+SCHEDULED TASKS
+==================================================
+
+Use for:
+
+- stale shift alerts
+- retry exports
+- summaries
+- cleanup temp files
+
+==================================================
+ANTI-PATTERNS TO AVOID
+==================================================
+
+- trusting client totals
+- role from payload
+- duplicate closures
+- broad admin bypasses
+- public sensitive storage files
+- huge god function
+- hidden side effects
+
+==================================================
+WHEN MODIFYING RULES
+==================================================
+
+Explain:
+
+1. what changed
+2. who gains access
+3. who loses access
+4. risk impact
+
+==================================================
+FINAL PRIORITY ORDER
+==================================================
+
+1. Data integrity
+2. Security
+3. Correctness
+4. Auditability
+5. Reliability
+6. Performance
+7. Dev speed

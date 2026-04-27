@@ -1,0 +1,322 @@
+# 200-compose-ui.mdc
+# Applies to: **/*Screen.kt, **/*Composable.kt
+
+You are building Jetpack Compose UI for Mini Cuadre Caja, an ERP/POS app used in real business operations.
+
+==================================================
+PRIMARY GOAL
+==================================================
+
+Design UI for:
+
+- speed
+- clarity
+- low error rate
+- touch efficiency
+- readability
+- reliability under pressure
+
+Beauty is secondary to operational efficiency.
+
+==================================================
+UI PHILOSOPHY
+==================================================
+
+This is not a social app.
+
+Users may be:
+- cashier in rush hour
+- admin reviewing numbers
+- staff using low-end devices
+- users with little technical training
+
+Therefore UI must be:
+
+- obvious
+- fast
+- forgiving
+- legible
+- stable
+
+==================================================
+GENERAL COMPOSE RULES
+==================================================
+
+- Prefer small reusable composables.
+- Keep screens readable.
+- Hoist state upward.
+- Stateless composables when possible.
+- Use Material 3 components.
+- Keep previews useful when practical.
+
+Avoid deeply nested UI trees.
+
+==================================================
+SCREEN STRUCTURE
+==================================================
+
+Prefer layout:
+
+Scaffold
+- TopBar
+- Content
+- Bottom actions / FAB if useful
+- SnackbarHost
+
+Use consistent sections:
+
+- Header summary
+- Main actions
+- Data list/table
+- Secondary actions
+
+==================================================
+VISUAL PRIORITIES
+==================================================
+
+Numbers and actions matter most.
+
+Emphasize:
+
+- totals
+- pending sync
+- warnings
+- close shift actions
+- payment method choices
+
+De-emphasize decorative elements.
+
+==================================================
+SPACING + READABILITY
+==================================================
+
+Use consistent spacing.
+
+Prefer:
+- 8dp minor gaps
+- 16dp standard padding
+- 24dp section separation
+
+Avoid cramped layouts.
+
+==================================================
+TYPOGRAPHY
+==================================================
+
+Use hierarchy clearly:
+
+- Large: totals / balances / titles
+- Medium: labels / cards
+- Small: metadata / timestamps
+
+Never make critical numbers tiny.
+
+==================================================
+COLOR USAGE
+==================================================
+
+Use color semantically:
+
+Positive:
+- success
+- synced
+- confirmed
+
+Warning:
+- pending
+- mismatch
+- caution
+
+Critical:
+- closure difference
+- failed sync
+- blocking errors
+
+Do not rely only on color; add text/icon.
+
+==================================================
+BUTTON RULES
+==================================================
+
+Primary actions must be obvious.
+
+Examples:
+- Registrar Venta
+- Cerrar Caja
+- Sincronizar
+- Confirmar
+
+Dangerous actions need confirmation.
+
+Buttons should be large enough for touch use.
+
+Avoid tiny icon-only critical actions.
+
+==================================================
+FORM RULES
+==================================================
+
+For data entry:
+
+- Use numeric keyboard where needed
+- Auto focus when useful
+- Clear labels
+- Inline validation
+- Preserve entered values on recomposition
+
+Prefer fewer fields.
+
+==================================================
+LISTS / TABLES
+==================================================
+
+Use LazyColumn for large lists.
+
+Rows should expose quickly:
+
+- item name
+- amount
+- status
+- timestamp
+- quick action if needed
+
+Use sticky headers if useful.
+
+==================================================
+CASHIER UX RULES
+==================================================
+
+Optimize repetitive flows:
+
+- minimum taps
+- large touch targets
+- category shortcuts
+- clear totals always visible
+- fast return after action
+
+If user sells 100 times/day, save taps.
+
+==================================================
+ERROR STATES
+==================================================
+
+Always design states for:
+
+- loading
+- empty
+- offline
+- retry
+- validation error
+- server failure
+
+Do not leave blank screens.
+
+==================================================
+SYNC STATUS UX
+==================================================
+
+Show clearly:
+
+- Synced
+- Pending
+- Retrying
+- Failed
+
+User must trust data state.
+
+==================================================
+FINANCIAL UI RULES
+==================================================
+
+Money formatting must be consistent.
+
+Always show currency clearly.
+
+Examples:
+$12,500
+
+Highlight:
+- expected cash
+- counted cash
+- difference
+- transfers
+- expenses
+
+==================================================
+DIALOGS
+==================================================
+
+Use dialogs only for:
+
+- confirmations
+- blocking warnings
+- critical differences
+- delete/cancel actions
+
+Avoid dialog abuse.
+
+==================================================
+RESPONSIVE RULES
+==================================================
+
+Support:
+
+- phones
+- tablets
+- desktop future scaling
+
+Use adaptive layouts when sensible.
+
+Avoid hardcoded sizes tied to one device.
+
+==================================================
+PERFORMANCE RULES
+==================================================
+
+- Avoid heavy recomposition
+- Use remember when appropriate
+- Stable parameters preferred
+- Avoid expensive formatting each frame
+
+==================================================
+ACCESSIBILITY
+==================================================
+
+- Touch targets large enough
+- Text readable
+- Content descriptions where useful
+- Contrast acceptable
+
+==================================================
+ANTI-PATTERNS TO AVOID
+==================================================
+
+- Overdesigned dashboards with poor usability
+- Tiny text for totals
+- Hidden critical actions
+- Too many colors
+- Long forms for quick tasks
+- Multiple competing buttons
+- Empty states with no guidance
+
+==================================================
+WHEN ASKED TO BUILD A SCREEN
+==================================================
+
+Prioritize:
+
+1. User task flow
+2. Speed
+3. Error prevention
+4. Clear state handling
+5. Clean visuals
+
+==================================================
+FINAL PRIORITY ORDER
+==================================================
+
+1. Operational speed
+2. Accuracy
+3. Clarity
+4. Reliability
+5. Visual polish

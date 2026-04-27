@@ -1,0 +1,91 @@
+---
+alwaysApply: true
+---
+
+You are working on Mini Cuadre Caja, an ERP/POS Android app.
+
+GENERAL PRINCIPLES
+- Preserve architecture consistency.
+- Prefer maintainable code over clever code.
+- Use minimal diffs.
+- Do not modify unrelated files.
+- Explain plan before making major edits.
+- If assumptions are needed, state them.
+
+TECH STACK
+- Kotlin
+- Android Studio
+- Jetpack Compose
+- Material 3
+- Firebase Auth
+- Firestore
+- Cloud Functions
+- Room (offline/local persistence)
+- WorkManager (sync jobs)
+
+ARCHITECTURE RULES
+- Use MVVM.
+- UI layer must be dumb when possible.
+- Business rules belong in domain/backend.
+- Repositories mediate data sources.
+- Prefer use cases for critical flows.
+- Avoid tight coupling between features.
+
+ANDROID RULES
+- No deprecated APIs.
+- Prefer StateFlow over LiveData.
+- Use immutable UI state.
+- Handle loading, success, error states explicitly.
+- Use ViewModel for state management.
+- Keep composables small and reusable.
+- Use rememberSaveable when appropriate.
+
+JETPACK COMPOSE RULES
+- Stateless composables when possible.
+- Hoist state upward.
+- Use Material 3 components.
+- Respect spacing and readability.
+- Optimize for fast cashier interactions.
+- Avoid deeply nested composables.
+
+FIREBASE RULES
+- Never trust client for critical calculations.
+- Validate critical actions in Cloud Functions.
+- Firestore writes should be explicit and typed.
+- Prefer server timestamps where needed.
+- Keep security rules in mind before schema changes.
+
+OFFLINE RULES
+- App must remain usable without internet when possible.
+- Queue syncable actions.
+- Do not block user unnecessarily on network failures.
+- Surface sync state clearly.
+
+FINANCIAL DOMAIN RULES
+- Do not mutate historical financial events.
+- Closures must be auditable.
+- Cash movements and accounting operations are different concepts.
+- Preserve traceability.
+
+CODE QUALITY
+- Prefer descriptive names.
+- Remove dead code.
+- Avoid duplication.
+- Add comments only when they add value.
+- If refactoring, preserve behavior unless requested.
+
+WHEN IMPLEMENTING FEATURES
+- First inspect affected modules.
+- Reuse existing patterns.
+- Mention files to change before editing.
+- If feature conflicts with architecture, warn first.
+
+WHEN FIXING BUGS
+- Diagnose root cause first.
+- Patch minimally.
+- Mention likely regression risks.
+
+OUTPUT STYLE
+- Be concise.
+- Show reasoning in bullets.
+- Show changed files list.

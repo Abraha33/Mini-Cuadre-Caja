@@ -1,0 +1,249 @@
+# 000-main-standards.mdc
+# Always Applied
+
+You are contributing to Mini Cuadre Caja, an Android ERP/POS application focused on cash control, daily closure, inventory operations, and offline-first reliability.
+
+==================================================
+CORE MISSION
+==================================================
+
+Build production-grade software that is:
+- stable
+- maintainable
+- auditable
+- secure
+- performant
+- easy to extend
+
+Prioritize business continuity over flashy code.
+
+==================================================
+WORKING STYLE
+==================================================
+
+Before coding:
+- Inspect relevant files first.
+- Understand existing patterns.
+- Reuse current architecture when valid.
+- State assumptions if context is incomplete.
+
+When editing:
+- Make minimal, precise changes.
+- Do not modify unrelated files.
+- Preserve behavior unless change is requested.
+- Prefer incremental improvements over rewrites.
+
+When responding:
+- Be concise.
+- Use bullet points.
+- Explain reasoning briefly.
+- List changed files after edits.
+
+==================================================
+TECH STACK
+==================================================
+
+Primary stack:
+- Kotlin
+- Android Studio
+- Jetpack Compose
+- Material 3
+- Coroutines
+- StateFlow
+- Hilt (if present)
+- Room
+- WorkManager
+- Firebase Auth
+- Firestore
+- Cloud Functions
+- Firebase Storage
+
+==================================================
+ENGINEERING PRINCIPLES
+==================================================
+
+- Prefer clarity over cleverness.
+- Prefer explicitness over magic.
+- Prefer composition over inheritance.
+- Prefer immutable models.
+- Prefer testable code.
+- Prefer small reusable units.
+- Keep side effects isolated.
+- Fail safely.
+- Keep domain logic independent from UI.
+
+==================================================
+ARCHITECTURE BASELINE
+==================================================
+
+Use these layers when possible:
+
+UI Layer:
+- Screens
+- Composables
+- ViewModels
+- UI State
+
+Domain Layer:
+- Models
+- Use Cases
+- Validators
+- Business rules
+
+Data Layer:
+- Repository interfaces
+- Repository implementations
+- Local data sources
+- Remote data sources
+- DTO mappers
+
+Infrastructure:
+- Sync workers
+- Firebase clients
+- Logging
+- File handling
+
+==================================================
+NAMING STANDARDS
+==================================================
+
+Use clear names.
+
+Good:
+- CreateClosureUseCase
+- CashSessionRepository
+- ClosureUiState
+- SyncPendingWorker
+
+Avoid:
+- Manager
+- Helper
+- Utils
+- Data2
+- TempStuff
+
+Boolean names:
+- isOpen
+- hasPendingSync
+- canCloseShift
+
+==================================================
+KOTLIN STANDARDS
+==================================================
+
+- Prefer data classes.
+- Prefer sealed classes for states/results.
+- Prefer interfaces at boundaries.
+- Prefer extension functions when meaningful.
+- Use nullability intentionally.
+- Avoid !! unless unavoidable.
+- Use suspend for async work.
+- Use Result or typed outcomes for failures.
+
+==================================================
+UI STANDARDS
+==================================================
+
+- UI should render state, not contain business logic.
+- Handle loading / empty / error / success states.
+- Use responsive layouts.
+- Optimize for speed of cashier actions.
+- Keep forms simple and clear.
+- Accessibility matters.
+
+==================================================
+DATA + BACKEND STANDARDS
+==================================================
+
+- Firestore is source of truth for cloud state.
+- Room is source of truth for local offline state.
+- Never trust client for critical calculations.
+- Critical validations belong in backend.
+- Use server timestamps when appropriate.
+- Schema changes must consider migration impact.
+
+==================================================
+FINANCIAL DOMAIN RULES
+==================================================
+
+- Money values require precision and consistency.
+- Never mutate historical financial records.
+- Use append-only events when possible.
+- Closures must be reproducible and auditable.
+- Cash movement != accounting movement.
+- Rounding rules must be explicit.
+
+==================================================
+OFFLINE-FIRST RULES
+==================================================
+
+- App should remain usable without internet.
+- Queue syncable actions.
+- Retrying must be safe.
+- Prevent duplicate financial events.
+- Surface sync status clearly to users.
+
+==================================================
+SECURITY RULES
+==================================================
+
+- Never hardcode secrets.
+- Respect least privilege.
+- Validate auth before privileged actions.
+- Avoid sensitive data in logs.
+- Assume hostile clients exist.
+
+==================================================
+PERFORMANCE RULES
+==================================================
+
+- Avoid unnecessary recomposition.
+- Avoid blocking main thread.
+- Use lazy lists for large datasets.
+- Avoid expensive work inside composables.
+- Optimize startup path.
+
+==================================================
+TESTING EXPECTATIONS
+==================================================
+
+When touching logic-heavy code, prefer tests for:
+- use cases
+- validators
+- repositories
+- viewmodels
+
+Do not introduce code that is hard to test.
+
+==================================================
+ANTI-PATTERNS TO AVOID
+==================================================
+
+- Massive God classes
+- Hidden side effects
+- Duplicated logic
+- UI calling Firebase directly (unless project pattern already does)
+- Hardcoded strings scattered in code
+- Premature abstraction
+- Large rewrites without request
+
+==================================================
+IF CONFLICTS APPEAR
+==================================================
+
+If a request conflicts with architecture:
+1. Warn clearly.
+2. Propose safer option.
+3. Proceed only if explicitly requested.
+
+==================================================
+FINAL PRIORITY ORDER
+==================================================
+
+1. Correctness
+2. Data integrity
+3. Security
+4. Reliability
+5. Maintainability
+6. Performance
+7. Speed of implementation

@@ -1,0 +1,343 @@
+# 600-offline-sync.mdc
+# Applies to: **/*Worker.kt, **/sync/**/*
+
+You are working on offline-first synchronization for Mini Cuadre Caja.
+
+This ERP/POS app must continue operating with unstable or absent internet.
+
+==================================================
+PRIMARY GOAL
+==================================================
+
+Build sync systems that are:
+
+- reliable
+- retry-safe
+- duplicate-safe
+- observable
+- recoverable
+- business-safe
+
+Never sacrifice data integrity for convenience.
+
+==================================================
+SYNC PHILOSOPHY
+==================================================
+
+Users operate business first.
+Synchronization happens safely in background.
+
+Core principle:
+
+Operate now.
+Sync correctly.
+Recover gracefully.
+
+==================================================
+ARCHITECTURE ROLE
+==================================================
+
+Local device handles:
+
+- immediate user actions
+- local persistence
+- pending operations
+- temporary UI truth
+
+Remote backend handles:
+
+- final cloud state
+- validations
+- cross-device consistency
+- exports
+- reporting
+
+==================================================
+SUPPORTED FAILURE CONDITIONS
+==================================================
+
+System should tolerate:
+
+- no internet
+- slow internet
+- intermittent internet
+- app killed
+- device restart
+- token refresh
+- duplicate retries
+- partial sync failures
+
+==================================================
+SYNC MODEL
+==================================================
+
+Prefer:
+
+Outbox pattern
+
+Local action:
+1. save locally
+2. enqueue sync task
+3. update UI immediately
+4. sync later
+
+Never rely on memory-only queues.
+
+==================================================
+QUEUE RULES
+==================================================
+
+Use persistent queue table.
+
+Suggested fields:
+
+id
+eventId
+entityType
+entityId
+action
+payload
+status
+priority
+retries
+createdAt
+lastAttemptAt
+lastError
+
+==================================================
+SYNC STATUS VALUES
+==================================================
+
+Use explicit states:
+
+PENDING
+PROCESSING
+SYNCED
+FAILED
+RETRY_WAIT
+DEAD_LETTER
+
+UI may simplify labels.
+
+==================================================
+IDEMPOTENCY
+==================================================
+
+Critical rule:
+
+Retries must not duplicate business events.
+
+Use:
+
+- client eventId UUID
+- requestId
+- backend duplicate detection
+
+Especially for:
+
+- sales
+- expenses
+- closures
+- exports
+
+==================================================
+ORDERING RULES
+==================================================
+
+Respect logical ordering.
+
+Example:
+
+1. open shift
+2. sales/events
+3. upload evidence
+4. close shift
+5. export reports
+
+Do not sync closure before pending sales.
+
+==================================================
+WORKMANAGER RULES
+==================================================
+
+Use WorkManager for durable jobs.
+
+Prefer:
+
+- unique work names when needed
+- network constraints
+- exponential backoff
+- persisted retries
+
+Avoid fragile manual timers.
+
+==================================================
+RETRY POLICY
+==================================================
+
+Use controlled retry strategy.
+
+Example:
+
+retry1 = 15s
+retry2 = 1m
+retry3 = 5m
+retry4 = 15m
+retry5 = 1h
+
+After threshold:
+DEAD_LETTER or manual intervention
+
+==================================================
+CONFLICT RULES
+==================================================
+
+When remote/local conflict occurs:
+
+Prefer append-only event models.
+
+If mutable records exist:
+
+- newest valid version
+or
+- server authority
+or
+- explicit merge strategy
+
+Must be intentional.
+
+==================================================
+ACTIVE SHIFT SAFETY
+==================================================
+
+If shift active offline:
+
+Allow operation locally.
+
+On reconnection:
+sync state carefully.
+
+Prevent:
+- duplicate active shifts
+- duplicate closures
+
+==================================================
+CLOSURE RULES
+==================================================
+
+Closing shift is critical.
+
+Before normal closure:
+
+- ensure pending financial events flushed if possible
+
+If offline contingency mode allowed:
+
+- save local provisional closure
+- lock new operations
+- mark pending remote finalization
+
+==================================================
+FILE / EVIDENCE SYNC
+==================================================
+
+Files may sync separately from metadata.
+
+Track:
+
+PENDING_UPLOAD
+UPLOADING
+UPLOADED
+FAILED_UPLOAD
+
+Never lose relation to parent entity.
+
+==================================================
+USER EXPERIENCE RULES
+==================================================
+
+Always communicate sync state clearly.
+
+Examples:
+
+Synced
+3 pending
+Retrying
+Offline mode
+Needs attention
+
+Users must trust the system.
+
+==================================================
+RECOVERY RULES
+==================================================
+
+After app restart:
+
+restore:
+- queue
+- active shift state
+- pending uploads
+- pending closure state
+
+Sync should resume safely.
+
+==================================================
+OBSERVABILITY
+==================================================
+
+Track metrics:
+
+- queue size
+- oldest pending item age
+- retry count
+- failure rate
+- last success time
+
+Useful for support/debugging.
+
+==================================================
+SECURITY RULES
+==================================================
+
+- Queue data tied to authenticated user context
+- Clear sensitive session data on logout when required
+- Refresh auth safely before sync attempts
+
+==================================================
+ANTI-PATTERNS TO AVOID
+==================================================
+
+- Fire-and-forget writes only
+- Memory-only pending queue
+- Infinite retries with no visibility
+- Duplicate sale creation
+- Closing shift with hidden pending items
+- Silent sync failures
+- Blocking all UI until internet returns
+
+==================================================
+WHEN ASKED TO CHANGE SYNC LOGIC
+==================================================
+
+Evaluate:
+
+1. duplicate risk
+2. data loss risk
+3. ordering risk
+4. UX impact
+5. recovery behavior
+
+Warn if unsafe.
+
+==================================================
+FINAL PRIORITY ORDER
+==================================================
+
+1. Data integrity
+2. Duplicate prevention
+3. Recoverability
+4. User continuity
+5. Visibility
+6. Performance
+7. Dev speed

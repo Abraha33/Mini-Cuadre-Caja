@@ -373,7 +373,7 @@ class CierreCajaViewModel(
                     .getHttpsCallable("crearCierre")
                     .call(payload)
                     .await()
-                    .data as? Map<*, *>
+                    .getData() as? Map<*, *>
 
                 val diferenciaSrv = (result?.get("diferencia") as? Number)?.toDouble() ?: s.diferencia
                 val nivelSrv = result?.get("nivel") as? String ?: s.nivel
