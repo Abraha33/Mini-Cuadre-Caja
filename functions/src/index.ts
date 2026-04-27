@@ -256,6 +256,56 @@ export const procesarInformeZ = onObjectFinalized(
       const transferencias = cierreData?.resumen?.transferencias ?? 0;
       const ingresosTotal = Number(ingresosEfectivo) + Number(transferencias);
 
+      // Validación fuerte: neto debe existir y ser >= 0. Si no, marca ERROR y no continúa.
+      const neto = resumen.neto;
+      if (neto == null || !Number.isFinite(neto) || neto < 0) {
+        await cierreDoc.ref.set(
+          {
+            z: {
+              ...(cierreData?.z ?? {}),
+              resumen: {
+                ventas: resumen.ventas ?? null,
+                devoluciones: resumen.devoluciones ?? null,
+                neto: neto ?? null,
+                pagos: resumen.pagos ?? null,
+                ingresos_total: ingresosTotal,
+                diff_vs_ingresos_total: null,
+                nivel: "ERROR",
+              },
+              validacion: "ERROR",
+              error: "Z inválido: neto requerido (>= 0).",
+              processed_at: FieldValue.serverTimestamp(),
+            },
+          },
+          {merge: true}
+        );
+
+        await crearLog({
+          modulo: "cierre_caja",
+          accion: "VALIDATE_Z_FAILED",
+          referencia_id: cierreDoc.id,
+          usuario_id: uid,
+          rol: await getUserRole(uid),
+          detalle: {
+            reason: "NETO_MISSING_OR_INVALID",
+            neto: neto ?? null,
+            ingresosTotal: ingresosTotal ?? null,
+          },
+        });
+
+        await crearAlerta({
+          tipo: "Z_INVALID",
+          nivel: "ERROR",
+          modulo: "cierre_caja",
+          referencia_id: cierreDoc.id,
+          mensaje: "Informe Z inválido: neto faltante/negativo.",
+          usuario_id: uid,
+        });
+
+        logger.warn("procesarInformeZ: invalid neto", {cierreId: cierreDoc.id, uid, name});
+        return;
+      }
+
       let diffVsIngresosTotal: number | undefined;
       if (resumen.neto != null && Number.isFinite(ingresosTotal)) {
         diffVsIngresosTotal = resumen.neto - ingresosTotal;
@@ -463,6 +513,12 @@ export const crearCierre = onCall(
     const monedas = numInput(conteo.monedas);
     const billetes = numInput(conteo.billetes);
     const totalContado = monedas + billetes;
+    if (monedas < 0 || billetes < 0) {
+      throw new HttpsError(
+        "invalid-argument",
+        "El conteo (monedas/billetes) no puede ser negativo."
+      );
+    }
     if (totalContado <= 0) {
       throw new HttpsError(
         "invalid-argument",
@@ -477,8 +533,7 @@ export const crearCierre = onCall(
     const cierreRef = db.collection("cierres_caja").doc(cierreDocId);
     const movQuery = db
       .collection("movimientos_caja")
-      .where("turno_id", "==", turnoId)
-      .where("usuario_id", "==", uid);
+      .where("turno_id", "==", turnoId);
 
     try {
       const result = await db.runTransaction(async (transaction) => {
@@ -540,6 +595,15 @@ export const crearCierre = onCall(
           throw new HttpsError(
             "failed-precondition",
             "Informe Z debe estar VALIDADO o WARNING antes de cerrar."
+          );
+        }
+        const zResumen = (z.resumen ?? {}) as Record<string, unknown>;
+        const zNetoRaw = zResumen.neto;
+        const zNeto = typeof zNetoRaw === "number" ? zNetoRaw : Number(zNetoRaw);
+        if (!Number.isFinite(zNeto) || zNeto < 0) {
+          throw new HttpsError(
+            "failed-precondition",
+            "Informe Z inválido: neto requerido (>= 0) para cerrar."
           );
         }
 
@@ -644,7 +708,49 @@ export const crearCierre = onCall(
       logger.info("crearCierre: success", {uid, cierreId: cierreDocId, turnoId});
       return {ok: true, ...result};
     } catch (e) {
-      await logError(e, uid);
+      const maybeHttpsCode =
+        e instanceof HttpsError
+          ? e.code
+          : typeof (e as any)?.code === "string"
+            ? String((e as any).code)
+            : "";
+
+      const msg = String((e as any)?.message ?? e);
+      await crearLog({
+        modulo: "cierre_caja",
+        accion: "CREATE_FAILED",
+        referencia_id: cierreDocId || undefined,
+        usuario_id: uid,
+        rol,
+        detalle: {
+          turnoId,
+          cajaId,
+          cierreDocId,
+          code: maybeHttpsCode || null,
+          message: msg,
+        },
+      });
+
+      logger.warn("crearCierre: failed", {
+        uid,
+        turnoId,
+        cierreId: cierreDocId,
+        code: maybeHttpsCode || undefined,
+        message: msg,
+      });
+
+      // Evita alertas CRITICAL del sistema para errores esperados/operativos (input/estado/permisos).
+      if (
+        !(e instanceof HttpsError) ||
+        (e.code !== "invalid-argument" &&
+          e.code !== "failed-precondition" &&
+          e.code !== "permission-denied" &&
+          e.code !== "not-found" &&
+          e.code !== "unauthenticated")
+      ) {
+        await logError(e, uid);
+      }
+
       throw e;
     }
   }
@@ -766,19 +872,18 @@ export const exportarCierre = onCall(
     const z = (cierre.z ?? {}) as Record<string, unknown>;
 
     const turnoId = String(cierre.turno_id ?? "");
-    let movSnap;
-    if (turnoId) {
-      movSnap = await db
-        .collection("movimientos_caja")
-        .where("usuario_id", "==", uid)
-        .where("turno_id", "==", turnoId)
-        .get();
-    } else {
-      movSnap = await db
-        .collection("movimientos_caja")
-        .where("usuario_id", "==", uid)
-        .get();
+    if (!turnoId) {
+      throw new HttpsError(
+        "failed-precondition",
+        "Cierre inválido: no tiene turno_id y no es exportable."
+      );
     }
+
+    const movSnap = await db
+      .collection("movimientos_caja")
+      .where("turno_id", "==", turnoId)
+      .orderBy("created_at", "asc")
+      .get();
 
     const movimientos = movSnap.docs.map((d) => serializeMovimiento(d));
 
