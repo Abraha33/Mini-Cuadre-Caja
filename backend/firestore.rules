@@ -1,5 +1,15 @@
 rules_version = '2';
 
+// Despliega reglas + índices con Firebase CLI desde /backend:
+//   firebase deploy --only firestore:rules,firestore:indexes
+//
+// Si Logcat muestra FAILED_PRECONDITION (índice): despliega firestore.indexes.json
+// o abre el enlace que Firebase añade al error y crea el índice en consola.
+//
+// Si hay PERMISSION_DENIED en listeners: (1) confirma que el doc en `usuarios/{uid}`
+// existe y tiene `rol` en ['admin','cajero'] para crear turnos; (2) que cada doc
+// en turnos/movimientos/cierres tenga el campo `usuario_id` igual al dueño.
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -42,8 +52,9 @@ service cloud.firestore {
     // Doc obligatorio para rol; create restringido (no auto-admin).
     // -----------------------------
     match /usuarios/{userId} {
-      allow read: if signedIn()
-        && (request.auth.uid == userId || isAdmin());
+      // Lectura del propio perfil sin evaluar isAdmin() (evita get() circular / denegaciones en SDK).
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow read: if signedIn() && request.auth.uid != userId && isAdmin();
 
       allow create: if signedIn()
         && request.auth.uid == userId

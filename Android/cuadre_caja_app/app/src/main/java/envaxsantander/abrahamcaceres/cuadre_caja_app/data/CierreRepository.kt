@@ -3,7 +3,6 @@ package envaxsantander.abrahamcaceres.cuadre_caja_app.data
 import android.util.Log
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.Query
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -90,9 +89,10 @@ class CierreRepository(
 
     fun observeMovimientos(usuarioId: String): Flow<List<MovimientoCaja>> = callbackFlow {
         // Asegúrate de que los nombres de los campos coincidan EXACTAMENTE con tu consola
+        // Sin orderBy en servidor: evita índice compuesto usuario_id + created_at (FAILED_PRECONDITION
+        // si el índice aún no está en consola). Ordenamos en cliente por created_at.
         val query = db.collection("movimientos_caja")
             .whereEqualTo("usuario_id", usuarioId)
-            .orderBy("created_at", Query.Direction.ASCENDING)
 
         val listener = query.addSnapshotListener { snapshot, error ->
             if (error != null) {
@@ -120,7 +120,14 @@ class CierreRepository(
                 }
             } ?: emptyList()
 
-            trySend(items)
+            val sorted = items.sortedWith(
+                compareBy<MovimientoCaja>(
+                    { it.createdAt?.seconds ?: Long.MIN_VALUE },
+                    { it.createdAt?.nanoseconds ?: 0 },
+                ),
+            )
+
+            trySend(sorted)
         }
 
         // Importante: Libera el listener cuando el Flow ya no se use
@@ -142,4 +149,26 @@ class CierreRepository(
     )
 
     suspend fun exportarCierreOficial(cierreId: String) = remote.exportarCierre(cierreId)
+
+    /** Crea documento `cierres_caja` tras subir el PDF al bucket (validación la hace el backend). */
+    suspend fun registrarPdfCierreInicial(
+        usuarioId: String,
+        pdfUrl: String,
+        storagePath: String,
+    ): String {
+        val data = mapOf(
+            "usuario_id" to usuarioId,
+            "z_pdf_url" to pdfUrl,
+            "z_pdf_path" to storagePath,
+            "estado" to "PDF_CARGADO",
+            "z" to mapOf(
+                "pdf_url" to pdfUrl,
+                "pdf_path" to storagePath,
+                "validacion" to "SUBIDO",
+            ),
+            "created_at" to FieldValue.serverTimestamp(),
+        )
+        val ref = db.collection("cierres_caja").add(data).await()
+        return ref.id
+    }
 }
